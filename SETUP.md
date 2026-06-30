@@ -32,8 +32,8 @@ In your GitHub repo → **Settings → Secrets and variables → Actions → New
 |-------------------------|------------------------------------|
 | `SUPABASE_URL`          | Your Supabase project URL          |
 | `SUPABASE_SERVICE_KEY`  | Supabase service_role key          |
-| `MCA_EMAIL`             | Your MCA portal login email        |
-| `MCA_PASSWORD`          | Your MCA portal password           |
+| `MCA_SDS_NUMBER`        | Your Seafarer Reference Number (from your NoE email) |
+| `MCA_DOB`               | Your date of birth, format `DD/MM/YYYY` |
 | `RESEND_API_KEY`        | Resend API key                     |
 | `NOTIFY_EMAIL`          | Where to send alerts (your email)  |
 | `TARGET_DATE`           | `2025-11-25` (your current booking)|

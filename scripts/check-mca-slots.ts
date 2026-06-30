@@ -4,8 +4,8 @@ import { Resend } from "resend";
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
-const MCA_EMAIL = process.env.MCA_EMAIL!;
-const MCA_PASSWORD = process.env.MCA_PASSWORD!;
+const MCA_SDS_NUMBER = process.env.MCA_SDS_NUMBER!; // Seafarer Reference Number
+const MCA_DOB = process.env.MCA_DOB!; // format: DD/MM/YYYY (matches the portal's date field)
 const RESEND_API_KEY = process.env.RESEND_API_KEY!;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL!;
 const TARGET_DATE = process.env.TARGET_DATE ?? "2025-11-25"; // earliest known slot
@@ -30,30 +30,24 @@ async function main() {
       { waitUntil: "networkidle", timeout: 60000 }
     );
 
-    // 2. Sign in
-    await page.click('a[href*="signin"], button:has-text("Sign in"), a:has-text("Sign in")');
+    // 2. Identity verification: SDS number + date of birth (per MCA NoE email instructions)
+    const sdsInput = page.locator(
+      'input[name*="sds" i], input[id*="sds" i], input[placeholder*="SDS" i], input[placeholder*="seafarer" i], input[placeholder*="reference" i]'
+    );
+    await sdsInput.first().fill(MCA_SDS_NUMBER);
+
+    const dobInput = page.locator(
+      'input[name*="dob" i], input[id*="dob" i], input[placeholder*="date of birth" i], input[type="date"]'
+    );
+    await dobInput.first().fill(MCA_DOB);
+
+    const continueBtn = page.locator(
+      'button:has-text("Continue"), button:has-text("Submit"), button:has-text("Verify"), button[type="submit"]'
+    );
+    await continueBtn.first().click();
     await page.waitForNavigation({ waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
 
-    // Fill email
-    const emailInput = page.locator('input[type="email"], input[name="loginfmt"], #i0116');
-    await emailInput.fill(MCA_EMAIL);
-    await page.keyboard.press("Enter");
-    await page.waitForTimeout(2000);
-
-    // Fill password (Microsoft SSO pattern)
-    const passInput = page.locator('input[type="password"], input[name="passwd"], #i0118');
-    await passInput.fill(MCA_PASSWORD);
-    await page.keyboard.press("Enter");
-    await page.waitForNavigation({ waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
-
-    // Handle "Stay signed in?" prompt
-    const staySignedIn = page.locator('input[value="Yes"], button:has-text("Yes")');
-    if (await staySignedIn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await staySignedIn.click();
-      await page.waitForNavigation({ waitUntil: "networkidle", timeout: 20000 }).catch(() => {});
-    }
-
-    console.log("Logged in, navigating to booking page...");
+    console.log("Identity verified, on booking dashboard...");
 
     // 3. Navigate back to booking if redirected away
     if (!page.url().includes("book_and_manage_an_oral_exam")) {
@@ -116,6 +110,7 @@ async function main() {
     }
   } catch (err) {
     console.error("Error during check:", err);
+    await page.screenshot({ path: `screenshot-failure-${Date.now()}.png`, fullPage: true }).catch(() => {});
     // Log failure to Supabase
     await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
