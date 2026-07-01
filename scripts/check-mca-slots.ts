@@ -120,8 +120,12 @@ async function main() {
       }
 
       if (ctaClicked) {
+        // Wait for navigation to SDS page — URL must change away from landing page
+        await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 20000 }).catch(() => {});
         await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(5000);
+        // Wait for the SDS input to actually appear before proceeding
+        await page.locator("input:not([type='hidden'])").first().waitFor({ timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(1000);
         console.log("After CTA click — URL:", page.url());
         await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
 
