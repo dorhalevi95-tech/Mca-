@@ -21,7 +21,7 @@ async function getNotifications(): Promise<Notification[]> {
   return (data as Notification[]) ?? [];
 }
 
-export const revalidate = 60; // refresh every 60s
+export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const [checks, notifications] = await Promise.all([getChecks(), getNotifications()]);
