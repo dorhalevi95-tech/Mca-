@@ -221,12 +221,29 @@ async function main() {
         'input[type="text"]',
       ];
 
+      // Log all inputs on DOB page for debugging
+      const dobPageInputs = await page.locator("input:not([type='hidden'])").all();
+      console.log(`DOB page has ${dobPageInputs.length} inputs:`);
+      for (const el of dobPageInputs) {
+        const name = await el.getAttribute("name").catch(() => "");
+        const id = await el.getAttribute("id").catch(() => "");
+        const type = await el.getAttribute("type").catch(() => "");
+        const placeholder = await el.getAttribute("placeholder").catch(() => "");
+        const value = await el.inputValue().catch(() => "");
+        console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}" current="${value}"`);
+      }
+      console.log(`DOB value to fill: "${MCA_DOB}" (should be DD/MM/YYYY)`);
+
       let dobFilled = false;
       for (const sel of dobSelectors) {
         const el = page.locator(sel).first();
         if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await el.fill(MCA_DOB);
-          console.log(`Filled DOB using selector: ${sel}`);
+          await el.click();
+          await el.fill("");
+          // Type character by character to trigger portal's date validation
+          await el.pressSequentially(MCA_DOB, { delay: 50 });
+          const filledValue = await el.inputValue().catch(() => "");
+          console.log(`Filled DOB using selector: ${sel} — value in field: "${filledValue}"`);
           dobFilled = true;
           break;
         }
@@ -248,7 +265,18 @@ async function main() {
 
       await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
       await page.waitForTimeout(3000);
-      console.log("After DOB submit — now on:", page.url());
+      const afterDobUrl = page.url();
+      console.log("After DOB submit — now on:", afterDobUrl);
+
+      if (afterDobUrl.includes("date_of_birth") || afterDobUrl.includes("dob")) {
+        // Still on DOB page — likely wrong format or validation error
+        const errorText = await page.locator('.validation-summary-errors, .field-validation-error, [class*="error"], [class*="alert"]').first().textContent().catch(() => "");
+        console.warn(`DOB submit rejected — still on DOB page. Error text: "${errorText}"`);
+        console.warn(`Check that MCA_DOB secret is set as DD/MM/YYYY (e.g. 25/06/1990)`);
+        // Log page text to see what error is shown
+        const bodyText = await page.locator("body").innerText().catch(() => "");
+        console.log("DOB page body text:", bodyText.slice(0, 800));
+      }
     }
 
     await page.screenshot({ path: `screenshot-after-submit-${Date.now()}.png`, fullPage: true });
