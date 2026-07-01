@@ -30,45 +30,47 @@ async function main() {
       { waitUntil: "networkidle", timeout: 60000 }
     );
 
-    // 2. Take a screenshot and log all inputs so we can see the real page structure
-    await page.screenshot({ path: `screenshot-page-load-${Date.now()}.png`, fullPage: true });
+    // 2. Accept cookie consent banner (blocks the real form)
+    const acceptCookies = page.locator('#cookies-accept, button:has-text("Accept"), button:has-text("accept cookies")');
+    if (await acceptCookies.isVisible({ timeout: 5000 }).catch(() => false)) {
+      console.log("Accepting cookies...");
+      await acceptCookies.first().click();
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+    }
 
-    const allInputs = await page.locator("input, select, textarea, button").all();
-    console.log(`Found ${allInputs.length} interactive elements on page:`);
+    // 3. Take screenshot and log inputs after cookies accepted
+    await page.screenshot({ path: `screenshot-after-cookies-${Date.now()}.png`, fullPage: true });
+    const allInputs = await page.locator("input, select, textarea").all();
+    console.log(`Found ${allInputs.length} form inputs after cookie acceptance:`);
     for (const el of allInputs) {
-      const tag = await el.evaluate((e) => e.tagName).catch(() => "?");
       const name = await el.getAttribute("name").catch(() => "");
       const id = await el.getAttribute("id").catch(() => "");
       const placeholder = await el.getAttribute("placeholder").catch(() => "");
       const type = await el.getAttribute("type").catch(() => "");
       const ariaLabel = await el.getAttribute("aria-label").catch(() => "");
-      const text = tag === "BUTTON" ? await el.textContent().catch(() => "") : "";
-      console.log(`  ${tag} name="${name}" id="${id}" type="${type}" placeholder="${placeholder}" aria-label="${ariaLabel}" text="${text?.trim()}"`);
+      console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}" aria-label="${ariaLabel}"`);
     }
 
-    // 3. Identity verification — try broad selectors first, fall back to first/second visible input
-    let sdsInput = page.locator('input[name*="sds" i], input[id*="sds" i], input[placeholder*="SDS" i], input[placeholder*="seafarer" i], input[placeholder*="reference" i], input[aria-label*="sds" i], input[aria-label*="seafarer" i]');
-    let sdsCount = await sdsInput.count();
-    if (sdsCount === 0) {
-      console.log("SDS selector found nothing — falling back to first visible text input");
-      sdsInput = page.locator('input[type="text"], input:not([type])').first();
-    }
-    await sdsInput.first().fill(MCA_SDS_NUMBER);
+    // 4. Fill in SDS number and DOB
+    const sdsInput = page.locator(
+      'input[name*="sds" i], input[id*="sds" i], input[placeholder*="SDS" i], input[placeholder*="seafarer" i], input[placeholder*="reference" i], input[aria-label*="sds" i], input[aria-label*="seafarer" i], input[type="text"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])'
+    ).first();
+    await sdsInput.waitFor({ timeout: 15000 });
+    await sdsInput.fill(MCA_SDS_NUMBER);
+    console.log("Filled SDS number");
 
-    let dobInput = page.locator('input[name*="dob" i], input[id*="dob" i], input[placeholder*="date" i], input[type="date"], input[aria-label*="birth" i], input[aria-label*="dob" i]');
-    let dobCount = await dobInput.count();
-    if (dobCount === 0) {
-      console.log("DOB selector found nothing — falling back to second visible text input");
-      dobInput = page.locator('input[type="text"], input:not([type])').nth(1);
-    }
-    await dobInput.first().fill(MCA_DOB);
+    const dobInput = page.locator(
+      'input[name*="dob" i], input[id*="dob" i], input[placeholder*="date" i], input[type="date"], input[aria-label*="birth" i], input[aria-label*="dob" i], input[type="text"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])'
+    ).nth(1);
+    await dobInput.fill(MCA_DOB);
+    console.log("Filled DOB");
 
     const continueBtn = page.locator(
       'button:has-text("Continue"), button:has-text("Submit"), button:has-text("Verify"), button:has-text("Search"), input[type="submit"], button[type="submit"]'
     );
     await continueBtn.first().click();
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
-
     console.log("Identity verified, on booking dashboard...");
 
     // 3. Navigate back to booking if redirected away
