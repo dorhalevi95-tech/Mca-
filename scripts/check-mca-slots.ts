@@ -4,11 +4,11 @@ import { Resend } from "resend";
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
-const MCA_SDS_NUMBER = process.env.MCA_SDS_NUMBER!; // Seafarer Reference Number
-const MCA_DOB = process.env.MCA_DOB!; // format: DD/MM/YYYY (matches the portal's date field)
+const MCA_SDS_NUMBER = process.env.MCA_SDS_NUMBER!;
+const MCA_DOB = process.env.MCA_DOB!;
 const RESEND_API_KEY = process.env.RESEND_API_KEY!;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL!;
-const TARGET_DATE = process.env.TARGET_DATE ?? "2025-11-25"; // earliest known slot
+const TARGET_DATE = process.env.TARGET_DATE ?? "2025-11-25";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const resend = new Resend(RESEND_API_KEY);
@@ -24,73 +24,166 @@ async function main() {
   const page = await context.newPage();
 
   try {
-    // 1. Navigate to the booking page
     await page.goto(
       "https://mymca-prod.powerappsportals.com/book_and_manage_an_oral_exam/",
-      { waitUntil: "networkidle", timeout: 60000 }
+      { waitUntil: "domcontentloaded", timeout: 60000 }
     );
 
-    // 2. Accept cookie consent banner (blocks the real form)
-    const acceptCookies = page.locator('#cookies-accept, button:has-text("Accept"), button:has-text("accept cookies")');
-    if (await acceptCookies.isVisible({ timeout: 5000 }).catch(() => false)) {
-      console.log("Accepting cookies...");
-      await acceptCookies.first().click();
-      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-      await page.waitForTimeout(3000);
+    // Wait for page to settle
+    await page.waitForTimeout(5000);
+
+    // Accept cookie consent banner
+    const cookieSelectors = [
+      '#cookies-accept',
+      'button:has-text("Accept all")',
+      'button:has-text("Accept cookies")',
+      'button:has-text("Accept")',
+      '[data-testid="cookie-accept"]',
+    ];
+    for (const sel of cookieSelectors) {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        console.log(`Accepting cookies via: ${sel}`);
+        await btn.click();
+        break;
+      }
     }
 
-    // 3. Take screenshot and log inputs after cookies accepted
+    // Wait for portal to fully render after cookie acceptance
+    await page.waitForTimeout(8000);
+    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+
     await page.screenshot({ path: `screenshot-after-cookies-${Date.now()}.png`, fullPage: true });
-    const allInputs = await page.locator("input, select, textarea").all();
-    console.log(`Found ${allInputs.length} form inputs after cookie acceptance:`);
-    for (const el of allInputs) {
+
+    // Log page structure
+    const pageTitle = await page.title();
+    console.log("Page title:", pageTitle);
+    console.log("Page URL:", page.url());
+
+    // Check for iframes
+    const frames = page.frames();
+    console.log(`Found ${frames.length} frames on page`);
+    for (const frame of frames) {
+      console.log(`  Frame URL: ${frame.url()}`);
+    }
+
+    // Try to find inputs in the main page first
+    const mainInputs = await page.locator("input:not([type='hidden']), select, textarea").all();
+    console.log(`Main frame has ${mainInputs.length} visible form elements`);
+    for (const el of mainInputs) {
       const name = await el.getAttribute("name").catch(() => "");
       const id = await el.getAttribute("id").catch(() => "");
-      const placeholder = await el.getAttribute("placeholder").catch(() => "");
       const type = await el.getAttribute("type").catch(() => "");
-      const ariaLabel = await el.getAttribute("aria-label").catch(() => "");
-      console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}" aria-label="${ariaLabel}"`);
+      const placeholder = await el.getAttribute("placeholder").catch(() => "");
+      console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}"`);
     }
 
-    // 4. Fill in SDS number and DOB
-    const sdsInput = page.locator(
-      'input[name*="sds" i], input[id*="sds" i], input[placeholder*="SDS" i], input[placeholder*="seafarer" i], input[placeholder*="reference" i], input[aria-label*="sds" i], input[aria-label*="seafarer" i], input[type="text"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])'
-    ).first();
-    await sdsInput.waitFor({ timeout: 15000 });
-    await sdsInput.fill(MCA_SDS_NUMBER);
-    console.log("Filled SDS number");
+    // Try each iframe for inputs
+    let targetFrame = page.mainFrame();
+    for (const frame of frames) {
+      if (frame === page.mainFrame()) continue;
+      const frameInputs = await frame.locator("input:not([type='hidden'])").all();
+      console.log(`Frame ${frame.url()} has ${frameInputs.length} inputs`);
+      if (frameInputs.length > 0) {
+        targetFrame = frame;
+        break;
+      }
+    }
 
-    const dobInput = page.locator(
-      'input[name*="dob" i], input[id*="dob" i], input[placeholder*="date" i], input[type="date"], input[aria-label*="birth" i], input[aria-label*="dob" i], input[type="text"], input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])'
-    ).nth(1);
-    await dobInput.fill(MCA_DOB);
-    console.log("Filled DOB");
+    // Fill SDS number — try common field patterns
+    const sdsSelectors = [
+      'input[name*="sds" i]',
+      'input[id*="sds" i]',
+      'input[placeholder*="SDS" i]',
+      'input[placeholder*="seafarer" i]',
+      'input[placeholder*="reference" i]',
+      'input[aria-label*="sds" i]',
+      'input[aria-label*="seafarer" i]',
+      'input[type="text"]:first-of-type',
+    ];
 
-    const continueBtn = page.locator(
-      'button:has-text("Continue"), button:has-text("Submit"), button:has-text("Verify"), button:has-text("Search"), input[type="submit"], button[type="submit"]'
-    );
-    await continueBtn.first().click();
+    let sdsFilled = false;
+    for (const sel of sdsSelectors) {
+      const el = targetFrame.locator(sel).first();
+      if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await el.fill(MCA_SDS_NUMBER);
+        console.log(`Filled SDS using selector: ${sel}`);
+        sdsFilled = true;
+        break;
+      }
+    }
+
+    if (!sdsFilled) {
+      // Last resort: fill first visible text input
+      const firstInput = targetFrame.locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])").first();
+      await firstInput.waitFor({ timeout: 20000 });
+      await firstInput.fill(MCA_SDS_NUMBER);
+      console.log("Filled SDS using first available input");
+    }
+
+    // Fill DOB — second visible text input or specific selectors
+    const dobSelectors = [
+      'input[name*="dob" i]',
+      'input[id*="dob" i]',
+      'input[placeholder*="date of birth" i]',
+      'input[placeholder*="DD/MM/YYYY" i]',
+      'input[type="date"]',
+      'input[aria-label*="birth" i]',
+      'input[aria-label*="dob" i]',
+    ];
+
+    let dobFilled = false;
+    for (const sel of dobSelectors) {
+      const el = targetFrame.locator(sel).first();
+      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await el.fill(MCA_DOB);
+        console.log(`Filled DOB using selector: ${sel}`);
+        dobFilled = true;
+        break;
+      }
+    }
+
+    if (!dobFilled) {
+      const secondInput = targetFrame.locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])").nth(1);
+      if (await secondInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await secondInput.fill(MCA_DOB);
+        console.log("Filled DOB using second visible input");
+      }
+    }
+
+    await page.screenshot({ path: `screenshot-filled-${Date.now()}.png`, fullPage: true });
+
+    // Submit the form
+    const submitSelectors = [
+      'button:has-text("Continue")',
+      'button:has-text("Submit")',
+      'button:has-text("Verify")',
+      'button:has-text("Search")',
+      'button:has-text("Find")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+    ];
+
+    for (const sel of submitSelectors) {
+      const btn = targetFrame.locator(sel).first();
+      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await btn.click();
+        console.log(`Clicked submit via: ${sel}`);
+        break;
+      }
+    }
+
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
-    console.log("Identity verified, on booking dashboard...");
+    await page.waitForTimeout(5000);
+    console.log("Submitted — now on:", page.url());
 
-    // 3. Navigate back to booking if redirected away
-    if (!page.url().includes("book_and_manage_an_oral_exam")) {
-      await page.goto(
-        "https://mymca-prod.powerappsportals.com/book_and_manage_an_oral_exam/",
-        { waitUntil: "networkidle", timeout: 60000 }
-      );
-    }
-
-    // 4. Look for available exam slots
-    // The portal shows a calendar or list of available dates
-    await page.waitForTimeout(3000);
+    await page.screenshot({ path: `screenshot-after-submit-${Date.now()}.png`, fullPage: true });
 
     const pageContent = await page.content();
     const slots = await extractSlots(page);
-
     console.log(`Found ${slots.length} available slot(s):`, slots);
 
-    // 5. Store check result in Supabase
     const { error: insertErr } = await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
       slots_found: slots,
@@ -99,7 +192,6 @@ async function main() {
     });
     if (insertErr) console.error("Supabase insert error:", insertErr);
 
-    // 6. Check for slots earlier than the target date
     const targetMs = new Date(TARGET_DATE).getTime();
     const earlierSlots = slots.filter((s) => {
       const d = parseSlotDate(s);
@@ -109,7 +201,6 @@ async function main() {
     if (earlierSlots.length > 0) {
       console.log("EARLIER SLOTS FOUND:", earlierSlots);
 
-      // Check if we already notified about these slots
       const { data: existing } = await supabase
         .from("notifications")
         .select("slot_label")
@@ -120,8 +211,6 @@ async function main() {
 
       if (newSlots.length > 0) {
         await sendNotification(newSlots);
-
-        // Record notification
         await supabase.from("notifications").insert(
           newSlots.map((s) => ({
             slot_label: s,
@@ -135,7 +224,6 @@ async function main() {
   } catch (err) {
     console.error("Error during check:", err);
     await page.screenshot({ path: `screenshot-failure-${Date.now()}.png`, fullPage: true }).catch(() => {});
-    // Log failure to Supabase
     await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
       slots_found: [],
@@ -151,14 +239,12 @@ async function main() {
 async function extractSlots(page: any): Promise<string[]> {
   const slots: string[] = [];
 
-  // Strategy 1: look for date elements in a calendar widget
   const dateEls = await page.locator('[class*="calendar"] [class*="day"]:not([class*="disabled"]):not([class*="past"])').all();
   for (const el of dateEls) {
     const text = await el.textContent().catch(() => "");
     if (text?.trim()) slots.push(text.trim());
   }
 
-  // Strategy 2: look for select/option lists with dates
   if (slots.length === 0) {
     const options = await page.locator('select option, [role="option"]').all();
     for (const opt of options) {
@@ -169,7 +255,6 @@ async function extractSlots(page: any): Promise<string[]> {
     }
   }
 
-  // Strategy 3: look for time slot buttons
   if (slots.length === 0) {
     const buttons = await page.locator('button:has-text("available"), [class*="slot"]:not([class*="taken"]):not([class*="disabled"])').all();
     for (const btn of buttons) {
@@ -178,7 +263,6 @@ async function extractSlots(page: any): Promise<string[]> {
     }
   }
 
-  // Strategy 4: scrape raw text for date patterns
   if (slots.length === 0) {
     const bodyText = await page.locator("body").innerText().catch(() => "");
     const datePattern = /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2})\b/gi;
