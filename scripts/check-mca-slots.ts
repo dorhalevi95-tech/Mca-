@@ -147,6 +147,17 @@ async function main() {
       }
     }
 
+    // Shared submit button selectors used across steps
+    const submitSelectors = [
+      'button:has-text("Continue")',
+      'button:has-text("Submit")',
+      'button:has-text("Verify")',
+      'button:has-text("Search")',
+      'button:has-text("Find")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+    ];
+
     // Fill SDS number — try common field patterns
     const sdsSelectors = [
       'input[name*="sds" i]',
@@ -178,49 +189,9 @@ async function main() {
       console.log("Filled SDS using first available input");
     }
 
-    // Fill DOB — second visible text input or specific selectors
-    const dobSelectors = [
-      'input[name*="dob" i]',
-      'input[id*="dob" i]',
-      'input[placeholder*="date of birth" i]',
-      'input[placeholder*="DD/MM/YYYY" i]',
-      'input[type="date"]',
-      'input[aria-label*="birth" i]',
-      'input[aria-label*="dob" i]',
-    ];
-
-    let dobFilled = false;
-    for (const sel of dobSelectors) {
-      const el = targetFrame.locator(sel).first();
-      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await el.fill(MCA_DOB);
-        console.log(`Filled DOB using selector: ${sel}`);
-        dobFilled = true;
-        break;
-      }
-    }
-
-    if (!dobFilled) {
-      const secondInput = targetFrame.locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])").nth(1);
-      if (await secondInput.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await secondInput.fill(MCA_DOB);
-        console.log("Filled DOB using second visible input");
-      }
-    }
-
     await page.screenshot({ path: `screenshot-filled-${Date.now()}.png`, fullPage: true });
 
-    // Submit the form
-    const submitSelectors = [
-      'button:has-text("Continue")',
-      'button:has-text("Submit")',
-      'button:has-text("Verify")',
-      'button:has-text("Search")',
-      'button:has-text("Find")',
-      'input[type="submit"]',
-      'button[type="submit"]',
-    ];
-
+    // Submit SDS form
     for (const sel of submitSelectors) {
       const btn = targetFrame.locator(sel).first();
       if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -231,8 +202,54 @@ async function main() {
     }
 
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
-    await page.waitForTimeout(5000);
-    console.log("Submitted — now on:", page.url());
+    await page.waitForTimeout(3000);
+    console.log("After SDS submit — now on:", page.url());
+
+    // Step 2: If we land on the DOB page, fill it and submit
+    if (page.url().includes("date_of_birth") || page.url().includes("dob")) {
+      console.log("On DOB page — filling date of birth...");
+      await page.screenshot({ path: `screenshot-dob-page-${Date.now()}.png`, fullPage: true });
+
+      const dobSelectors = [
+        'input[name*="dob" i]',
+        'input[id*="dob" i]',
+        'input[placeholder*="DD/MM/YYYY" i]',
+        'input[placeholder*="date" i]',
+        'input[type="date"]',
+        'input[aria-label*="birth" i]',
+        'input[aria-label*="dob" i]',
+        'input[type="text"]',
+      ];
+
+      let dobFilled = false;
+      for (const sel of dobSelectors) {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await el.fill(MCA_DOB);
+          console.log(`Filled DOB using selector: ${sel}`);
+          dobFilled = true;
+          break;
+        }
+      }
+
+      if (!dobFilled) {
+        console.warn("Could not find DOB input on DOB page");
+      }
+
+      // Submit DOB form
+      for (const sel of submitSelectors) {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await btn.click();
+          console.log(`Clicked DOB submit via: ${sel}`);
+          break;
+        }
+      }
+
+      await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+      console.log("After DOB submit — now on:", page.url());
+    }
 
     await page.screenshot({ path: `screenshot-after-submit-${Date.now()}.png`, fullPage: true });
 
