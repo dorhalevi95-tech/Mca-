@@ -79,9 +79,65 @@ async function main() {
       console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}"`);
     }
 
+    // Log all buttons/links on the page to find the right CTA
+    const allButtons = await page.locator("a, button").all();
+    console.log(`Found ${allButtons.length} buttons/links on landing page:`);
+    for (const btn of allButtons.slice(0, 20)) {
+      const text = await btn.textContent().catch(() => "");
+      const href = await btn.getAttribute("href").catch(() => "");
+      if (text?.trim()) console.log(`  BUTTON/LINK: "${text.trim()}" href="${href}"`);
+    }
+
+    // If no form inputs visible, the landing page needs a CTA click first
+    if (mainInputs.length === 0) {
+      console.log("No form inputs on landing page — looking for CTA button to start booking flow...");
+      const ctaSelectors = [
+        'a:has-text("Book")',
+        'a:has-text("book")',
+        'button:has-text("Book")',
+        'a:has-text("Start")',
+        'a:has-text("Manage")',
+        'a:has-text("Apply")',
+        'a:has-text("Continue")',
+        'a[href*="book"]',
+        'a[href*="oral"]',
+        '.cta a',
+        '.button',
+        'a.btn',
+        'button.btn',
+      ];
+
+      let ctaClicked = false;
+      for (const sel of ctaSelectors) {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+          const text = await el.textContent().catch(() => "");
+          console.log(`Clicking CTA: "${text?.trim()}" via ${sel}`);
+          await el.click();
+          ctaClicked = true;
+          break;
+        }
+      }
+
+      if (ctaClicked) {
+        await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+        await page.waitForTimeout(5000);
+        console.log("After CTA click — URL:", page.url());
+        await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
+
+        const postCtaInputs = await page.locator("input:not([type='hidden'])").all();
+        console.log(`Post-CTA: found ${postCtaInputs.length} inputs`);
+      } else {
+        console.log("No CTA found — dumping all page text for inspection:");
+        const bodyText = await page.locator("body").innerText().catch(() => "");
+        console.log(bodyText.slice(0, 2000));
+      }
+    }
+
     // Try each iframe for inputs
+    const framesAfterCta = page.frames();
     let targetFrame = page.mainFrame();
-    for (const frame of frames) {
+    for (const frame of framesAfterCta) {
       if (frame === page.mainFrame()) continue;
       const frameInputs = await frame.locator("input:not([type='hidden'])").all();
       console.log(`Frame ${frame.url()} has ${frameInputs.length} inputs`);
