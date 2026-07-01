@@ -229,28 +229,49 @@ async function main() {
         const id = await el.getAttribute("id").catch(() => "");
         const type = await el.getAttribute("type").catch(() => "");
         const placeholder = await el.getAttribute("placeholder").catch(() => "");
-        const value = await el.inputValue().catch(() => "");
-        console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}" current="${value}"`);
-      }
-      console.log(`DOB value to fill: "${MCA_DOB}" (should be DD/MM/YYYY)`);
-
-      let dobFilled = false;
-      for (const sel of dobSelectors) {
-        const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await el.click();
-          await el.fill("");
-          // Type character by character to trigger portal's date validation
-          await el.pressSequentially(MCA_DOB, { delay: 50 });
-          const filledValue = await el.inputValue().catch(() => "");
-          console.log(`Filled DOB using selector: ${sel} — value in field: "${filledValue}"`);
-          dobFilled = true;
-          break;
-        }
+        console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}"`);
       }
 
-      if (!dobFilled) {
-        console.warn("Could not find DOB input on DOB page");
+      // Portal has 3 separate fields: Day / Month / Year
+      // MCA_DOB format: DD/MM/YYYY — parse it
+      const dobParts = MCA_DOB.split(/[\/\-\.\s]+/);
+      const dobDay = dobParts[0] ?? "";
+      const dobMonth = dobParts[1] ?? "";
+      const dobYear = dobParts[2] ?? "";
+      console.log(`Parsed DOB — Day: "${dobDay}" Month: "${dobMonth}" Year: "${dobYear}"`);
+
+      // Fill Day field
+      const dayInput = page.locator('input[name*="day" i], input[id*="day" i], input[aria-label*="day" i]').first();
+      if (await dayInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await dayInput.fill(dobDay);
+        console.log(`Filled Day: ${dobDay}`);
+      } else {
+        // Fallback: first visible input
+        const first = page.locator("input:not([type='hidden'])").nth(0);
+        await first.fill(dobDay);
+        console.log(`Filled Day (fallback): ${dobDay}`);
+      }
+
+      // Fill Month field
+      const monthInput = page.locator('input[name*="month" i], input[id*="month" i], input[aria-label*="month" i]').first();
+      if (await monthInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await monthInput.fill(dobMonth);
+        console.log(`Filled Month: ${dobMonth}`);
+      } else {
+        const second = page.locator("input:not([type='hidden'])").nth(1);
+        await second.fill(dobMonth);
+        console.log(`Filled Month (fallback): ${dobMonth}`);
+      }
+
+      // Fill Year field
+      const yearInput = page.locator('input[name*="year" i], input[id*="year" i], input[aria-label*="year" i]').first();
+      if (await yearInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await yearInput.fill(dobYear);
+        console.log(`Filled Year: ${dobYear}`);
+      } else {
+        const third = page.locator("input:not([type='hidden'])").nth(2);
+        await third.fill(dobYear);
+        console.log(`Filled Year (fallback): ${dobYear}`);
       }
 
       // Submit DOB form
