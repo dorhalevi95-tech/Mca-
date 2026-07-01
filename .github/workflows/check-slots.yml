@@ -37,7 +37,7 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           TARGET_DATE: ${{ secrets.TARGET_DATE }}
-        run: npx ts-node --esm scripts/check-mca-slots.ts
+        run: npx ts-node --project tsconfig.scripts.json scripts/check-mca-slots.ts
 
       - name: Upload screenshot on failure
         if: failure()
