@@ -10,8 +10,30 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY!;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL!;
 const TARGET_DATE = process.env.TARGET_DATE ?? "2025-11-25";
 
+const SDS_URL = "https://mymca-prod.powerappsportals.com/enter-your-seafarer-reference-number/";
+const LANDING_URL = "https://mymca-prod.powerappsportals.com/book_and_manage_an_oral_exam/";
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const resend = new Resend(RESEND_API_KEY);
+
+async function acceptCookies(page: any) {
+  const cookieSelectors = [
+    "#cookies-accept",
+    'button:has-text("Accept all")',
+    'button:has-text("Accept cookies")',
+    'button:has-text("Accept")',
+  ];
+  for (const sel of cookieSelectors) {
+    const btn = page.locator(sel).first();
+    if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      console.log(`Accepting cookies via: ${sel}`);
+      await btn.click();
+      await page.waitForTimeout(2000);
+      return true;
+    }
+  }
+  return false;
+}
 
 async function main() {
   console.log(`[${new Date().toISOString()}] Starting MCA slot check...`);
@@ -24,145 +46,57 @@ async function main() {
   const page = await context.newPage();
 
   try {
-    await page.goto(
-      "https://mymca-prod.powerappsportals.com/book_and_manage_an_oral_exam/",
-      { waitUntil: "domcontentloaded", timeout: 60000 }
-    );
-
-    // Wait for page to settle
-    await page.waitForTimeout(5000);
-
-    // Accept cookie consent banner
-    const cookieSelectors = [
-      '#cookies-accept',
-      'button:has-text("Accept all")',
-      'button:has-text("Accept cookies")',
-      'button:has-text("Accept")',
-      '[data-testid="cookie-accept"]',
-    ];
-    for (const sel of cookieSelectors) {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-        console.log(`Accepting cookies via: ${sel}`);
-        await btn.click();
-        break;
-      }
-    }
-
-    // Wait for portal to fully render after cookie acceptance
-    await page.waitForTimeout(8000);
-    await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
+    // Step 1: Visit landing page to set cookies, then accept cookie consent
+    console.log("Loading landing page...");
+    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.waitForTimeout(3000);
+    await acceptCookies(page);
+    await page.waitForTimeout(2000);
+    console.log("Landing page done. URL:", page.url());
+    await page.screenshot({ path: `screenshot-landing-${Date.now()}.png`, fullPage: true });
 
-    await page.screenshot({ path: `screenshot-after-cookies-${Date.now()}.png`, fullPage: true });
+    // Step 2: Navigate directly to SDS entry page (skip clicking "Start now")
+    console.log("Navigating directly to SDS entry page...");
+    await page.goto(SDS_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.waitForTimeout(3000);
+    // Accept cookies again if they re-appear after navigation
+    await acceptCookies(page);
+    await page.waitForTimeout(2000);
+    console.log("SDS page URL:", page.url());
+    await page.screenshot({ path: `screenshot-sds-page-${Date.now()}.png`, fullPage: true });
 
-    // Log page structure
-    const pageTitle = await page.title();
-    console.log("Page title:", pageTitle);
-    console.log("Page URL:", page.url());
+    // If we were redirected away, try the landing page flow as fallback
+    if (!page.url().includes("enter-your-seafarer-reference-number")) {
+      console.log("Redirected away from SDS page. Trying landing page CTA click...");
+      await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.waitForTimeout(5000);
+      await acceptCookies(page);
+      await page.waitForTimeout(3000);
 
-    // Check for iframes
-    const frames = page.frames();
-    console.log(`Found ${frames.length} frames on page`);
-    for (const frame of frames) {
-      console.log(`  Frame URL: ${frame.url()}`);
-    }
-
-    // Try to find inputs in the main page first
-    const mainInputs = await page.locator("input:not([type='hidden']), select, textarea").all();
-    console.log(`Main frame has ${mainInputs.length} visible form elements`);
-    for (const el of mainInputs) {
-      const name = await el.getAttribute("name").catch(() => "");
-      const id = await el.getAttribute("id").catch(() => "");
-      const type = await el.getAttribute("type").catch(() => "");
-      const placeholder = await el.getAttribute("placeholder").catch(() => "");
-      console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}"`);
-    }
-
-    // Log all buttons/links on the page to find the right CTA
-    const allButtons = await page.locator("a, button").all();
-    console.log(`Found ${allButtons.length} buttons/links on landing page:`);
-    for (const btn of allButtons.slice(0, 20)) {
-      const text = await btn.textContent().catch(() => "");
-      const href = await btn.getAttribute("href").catch(() => "");
-      if (text?.trim()) console.log(`  BUTTON/LINK: "${text.trim()}" href="${href}"`);
-    }
-
-    // If no form inputs visible, the landing page needs a CTA click first
-    if (mainInputs.length === 0) {
-      console.log("No form inputs on landing page — looking for CTA button to start booking flow...");
       const ctaSelectors = [
-        'a:has-text("Book")',
-        'a:has-text("book")',
-        'button:has-text("Book")',
         'a:has-text("Start")',
-        'a:has-text("Manage")',
-        'a:has-text("Apply")',
-        'a:has-text("Continue")',
-        'a[href*="book"]',
-        'a[href*="oral"]',
-        '.cta a',
-        '.button',
-        'a.btn',
-        'button.btn',
+        'a:has-text("Book")',
+        'button:has-text("Start")',
+        'button:has-text("Book")',
+        'a[href*="enter-your-seafarer"]',
       ];
-
-      let ctaClicked = false;
       for (const sel of ctaSelectors) {
         const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-          const text = await el.textContent().catch(() => "");
-          console.log(`Clicking CTA: "${text?.trim()}" via ${sel}`);
+        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+          console.log(`Clicking CTA: ${sel}`);
           await el.click();
-          ctaClicked = true;
           break;
         }
       }
-
-      if (ctaClicked) {
-        // Wait for navigation to SDS page — URL must change away from landing page
-        await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 20000 }).catch(() => {});
-        await page.waitForLoadState("networkidle", { timeout: 20000 }).catch(() => {});
-        // Wait for the SDS input to actually appear before proceeding
-        await page.locator("input:not([type='hidden'])").first().waitFor({ timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(1000);
-        console.log("After CTA click — URL:", page.url());
-        await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
-
-        const postCtaInputs = await page.locator("input:not([type='hidden'])").all();
-        console.log(`Post-CTA: found ${postCtaInputs.length} inputs`);
-      } else {
-        console.log("No CTA found — dumping all page text for inspection:");
-        const bodyText = await page.locator("body").innerText().catch(() => "");
-        console.log(bodyText.slice(0, 2000));
-      }
+      // Wait generously for navigation
+      await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 45000 }).catch(() => {});
+      await page.waitForTimeout(3000);
+      console.log("After CTA fallback — URL:", page.url());
+      await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
     }
 
-    // Try each iframe for inputs
-    const framesAfterCta = page.frames();
-    let targetFrame = page.mainFrame();
-    for (const frame of framesAfterCta) {
-      if (frame === page.mainFrame()) continue;
-      const frameInputs = await frame.locator("input:not([type='hidden'])").all();
-      console.log(`Frame ${frame.url()} has ${frameInputs.length} inputs`);
-      if (frameInputs.length > 0) {
-        targetFrame = frame;
-        break;
-      }
-    }
-
-    // Shared submit button selectors used across steps
-    const submitSelectors = [
-      'button:has-text("Continue")',
-      'button:has-text("Submit")',
-      'button:has-text("Verify")',
-      'button:has-text("Search")',
-      'button:has-text("Find")',
-      'input[type="submit"]',
-      'button[type="submit"]',
-    ];
-
-    // Fill SDS number — try common field patterns
+    // Step 3: Fill SDS number
+    console.log("Looking for SDS input...");
     const sdsSelectors = [
       'input[name*="sds" i]',
       'input[id*="sds" i]',
@@ -171,33 +105,51 @@ async function main() {
       'input[placeholder*="reference" i]',
       'input[aria-label*="sds" i]',
       'input[aria-label*="seafarer" i]',
-      'input[type="text"]:first-of-type',
     ];
+
+    // Log all inputs on page for debugging
+    const allInputs = await page.locator("input:not([type='hidden'])").all();
+    console.log(`Found ${allInputs.length} inputs on SDS page:`);
+    for (const el of allInputs) {
+      const name = await el.getAttribute("name").catch(() => "");
+      const id = await el.getAttribute("id").catch(() => "");
+      const placeholder = await el.getAttribute("placeholder").catch(() => "");
+      console.log(`  INPUT name="${name}" id="${id}" placeholder="${placeholder}"`);
+    }
 
     let sdsFilled = false;
     for (const sel of sdsSelectors) {
-      const el = targetFrame.locator(sel).first();
+      const el = page.locator(sel).first();
       if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
         await el.fill(MCA_SDS_NUMBER);
-        console.log(`Filled SDS using selector: ${sel}`);
+        console.log(`Filled SDS using: ${sel}`);
         sdsFilled = true;
         break;
       }
     }
 
     if (!sdsFilled) {
-      // Last resort: fill first visible text input
-      const firstInput = targetFrame.locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])").first();
-      await firstInput.waitFor({ timeout: 20000 });
+      // Fallback: use first visible text input (wait up to 30s for it to appear)
+      const firstInput = page
+        .locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])")
+        .first();
+      console.log("Waiting for any visible input (up to 30s)...");
+      await firstInput.waitFor({ timeout: 30000 });
       await firstInput.fill(MCA_SDS_NUMBER);
       console.log("Filled SDS using first available input");
     }
 
-    await page.screenshot({ path: `screenshot-filled-${Date.now()}.png`, fullPage: true });
+    await page.screenshot({ path: `screenshot-sds-filled-${Date.now()}.png`, fullPage: true });
 
     // Submit SDS form
+    const submitSelectors = [
+      'button:has-text("Continue")',
+      'button:has-text("Submit")',
+      'button[type="submit"]',
+      'input[type="submit"]',
+    ];
     for (const sel of submitSelectors) {
-      const btn = targetFrame.locator(sel).first();
+      const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
         await btn.click();
         console.log(`Clicked submit via: ${sel}`);
@@ -207,74 +159,52 @@ async function main() {
 
     await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(3000);
-    console.log("After SDS submit — now on:", page.url());
+    console.log("After SDS submit — URL:", page.url());
+    await page.screenshot({ path: `screenshot-after-sds-${Date.now()}.png`, fullPage: true });
 
-    // Step 2: If we land on the DOB page, fill it and submit
+    // Step 4: DOB page — portal has 3 separate Day/Month/Year fields
     if (page.url().includes("date_of_birth") || page.url().includes("dob")) {
       console.log("On DOB page — filling date of birth...");
-      await page.screenshot({ path: `screenshot-dob-page-${Date.now()}.png`, fullPage: true });
 
-      const dobSelectors = [
-        'input[name*="dob" i]',
-        'input[id*="dob" i]',
-        'input[placeholder*="DD/MM/YYYY" i]',
-        'input[placeholder*="date" i]',
-        'input[type="date"]',
-        'input[aria-label*="birth" i]',
-        'input[aria-label*="dob" i]',
-        'input[type="text"]',
-      ];
-
-      // Log all inputs on DOB page for debugging
-      const dobPageInputs = await page.locator("input:not([type='hidden'])").all();
-      console.log(`DOB page has ${dobPageInputs.length} inputs:`);
-      for (const el of dobPageInputs) {
-        const name = await el.getAttribute("name").catch(() => "");
-        const id = await el.getAttribute("id").catch(() => "");
-        const type = await el.getAttribute("type").catch(() => "");
-        const placeholder = await el.getAttribute("placeholder").catch(() => "");
-        console.log(`  INPUT name="${name}" id="${id}" type="${type}" placeholder="${placeholder}"`);
-      }
-
-      // Portal has 3 separate fields: Day / Month / Year
-      // MCA_DOB format: DD/MM/YYYY — parse it
       const dobParts = MCA_DOB.split(/[\/\-\.\s]+/);
       const dobDay = dobParts[0] ?? "";
       const dobMonth = dobParts[1] ?? "";
       const dobYear = dobParts[2] ?? "";
       console.log(`Parsed DOB — Day: "${dobDay}" Month: "${dobMonth}" Year: "${dobYear}"`);
 
-      // Fill Day field
+      // Log inputs for debugging
+      const dobInputs = await page.locator("input:not([type='hidden'])").all();
+      console.log(`DOB page has ${dobInputs.length} inputs:`);
+      for (const el of dobInputs) {
+        const name = await el.getAttribute("name").catch(() => "");
+        const id = await el.getAttribute("id").catch(() => "");
+        console.log(`  INPUT name="${name}" id="${id}"`);
+      }
+
       const dayInput = page.locator('input[name*="day" i], input[id*="day" i], input[aria-label*="day" i]').first();
-      if (await dayInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+      if (await dayInput.isVisible({ timeout: 5000 }).catch(() => false)) {
         await dayInput.fill(dobDay);
         console.log(`Filled Day: ${dobDay}`);
       } else {
-        // Fallback: first visible input
-        const first = page.locator("input:not([type='hidden'])").nth(0);
-        await first.fill(dobDay);
+        await page.locator("input:not([type='hidden'])").nth(0).fill(dobDay);
         console.log(`Filled Day (fallback): ${dobDay}`);
       }
 
-      // Fill Month field
       const monthInput = page.locator('input[name*="month" i], input[id*="month" i], input[aria-label*="month" i]').first();
-      if (await monthInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+      if (await monthInput.isVisible({ timeout: 5000 }).catch(() => false)) {
         await monthInput.fill(dobMonth);
         console.log(`Filled Month: ${dobMonth}`);
       } else {
-        const second = page.locator("input:not([type='hidden'])").nth(1);
-        await second.fill(dobMonth);
+        await page.locator("input:not([type='hidden'])").nth(1).fill(dobMonth);
         console.log(`Filled Month (fallback): ${dobMonth}`);
       }
 
-      // Fill Year field
       const yearInput = page.locator('input[name*="year" i], input[id*="year" i], input[aria-label*="year" i]').first();
-      if (await yearInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+      if (await yearInput.isVisible({ timeout: 5000 }).catch(() => false)) {
         await yearInput.fill(dobYear);
         console.log(`Filled Year: ${dobYear}`);
       } else {
-        const third = page.locator("input:not([type='hidden'])").nth(2);
-        await third.fill(dobYear);
+        await page.locator("input:not([type='hidden'])").nth(2).fill(dobYear);
         console.log(`Filled Year (fallback): ${dobYear}`);
       }
 
@@ -291,21 +221,25 @@ async function main() {
       await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
       await page.waitForTimeout(3000);
       const afterDobUrl = page.url();
-      console.log("After DOB submit — now on:", afterDobUrl);
+      console.log("After DOB submit — URL:", afterDobUrl);
 
       if (afterDobUrl.includes("date_of_birth") || afterDobUrl.includes("dob")) {
-        // Still on DOB page — likely wrong format or validation error
-        const errorText = await page.locator('.validation-summary-errors, .field-validation-error, [class*="error"], [class*="alert"]').first().textContent().catch(() => "");
-        console.warn(`DOB submit rejected — still on DOB page. Error text: "${errorText}"`);
-        console.warn(`Check that MCA_DOB secret is set as DD/MM/YYYY (e.g. 25/06/1990)`);
-        // Log page text to see what error is shown
+        const errorText = await page
+          .locator('.validation-summary-errors, .field-validation-error, [class*="error"], [class*="alert"]')
+          .first()
+          .textContent()
+          .catch(() => "");
+        console.warn(`DOB submit rejected — still on DOB page. Error: "${errorText}"`);
+        console.warn(`Check MCA_DOB secret is DD/MM/YYYY (e.g. 25/06/1990)`);
         const bodyText = await page.locator("body").innerText().catch(() => "");
-        console.log("DOB page body text:", bodyText.slice(0, 800));
+        console.log("DOB page body:", bodyText.slice(0, 800));
       }
     }
 
-    await page.screenshot({ path: `screenshot-after-submit-${Date.now()}.png`, fullPage: true });
+    await page.screenshot({ path: `screenshot-final-${Date.now()}.png`, fullPage: true });
+    console.log("Final URL:", page.url());
 
+    // Step 5: Extract available slots
     const pageContent = await page.content();
     const slots = await extractSlots(page);
     console.log(`Found ${slots.length} available slot(s):`, slots);
@@ -349,7 +283,9 @@ async function main() {
     }
   } catch (err) {
     console.error("Error during check:", err);
-    await page.screenshot({ path: `screenshot-failure-${Date.now()}.png`, fullPage: true }).catch(() => {});
+    await page
+      .screenshot({ path: `screenshot-failure-${Date.now()}.png`, fullPage: true })
+      .catch(() => {});
     await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
       slots_found: [],
@@ -365,7 +301,9 @@ async function main() {
 async function extractSlots(page: any): Promise<string[]> {
   const slots: string[] = [];
 
-  const dateEls = await page.locator('[class*="calendar"] [class*="day"]:not([class*="disabled"]):not([class*="past"])').all();
+  const dateEls = await page
+    .locator('[class*="calendar"] [class*="day"]:not([class*="disabled"]):not([class*="past"])')
+    .all();
   for (const el of dateEls) {
     const text = await el.textContent().catch(() => "");
     if (text?.trim()) slots.push(text.trim());
@@ -375,14 +313,23 @@ async function extractSlots(page: any): Promise<string[]> {
     const options = await page.locator('select option, [role="option"]').all();
     for (const opt of options) {
       const text = await opt.textContent().catch(() => "");
-      if (text && /\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{2}-\d{2}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec/i.test(text)) {
+      if (
+        text &&
+        /\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{2}-\d{2}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec/i.test(
+          text
+        )
+      ) {
         slots.push(text.trim());
       }
     }
   }
 
   if (slots.length === 0) {
-    const buttons = await page.locator('button:has-text("available"), [class*="slot"]:not([class*="taken"]):not([class*="disabled"])').all();
+    const buttons = await page
+      .locator(
+        'button:has-text("available"), [class*="slot"]:not([class*="taken"]):not([class*="disabled"])'
+      )
+      .all();
     for (const btn of buttons) {
       const text = await btn.textContent().catch(() => "");
       if (text?.trim()) slots.push(text.trim());
@@ -391,7 +338,8 @@ async function extractSlots(page: any): Promise<string[]> {
 
   if (slots.length === 0) {
     const bodyText = await page.locator("body").innerText().catch(() => "");
-    const datePattern = /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2})\b/gi;
+    const datePattern =
+      /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2})\b/gi;
     const matches = bodyText.match(datePattern) ?? [];
     slots.push(...[...new Set(matches)]);
   }
