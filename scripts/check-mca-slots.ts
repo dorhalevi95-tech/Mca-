@@ -25,7 +25,7 @@ async function acceptCookies(page: any) {
   ];
   for (const sel of cookieSelectors) {
     const btn = page.locator(sel).first();
-    if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
       console.log(`Accepting cookies via: ${sel}`);
       await btn.click();
       await page.waitForTimeout(2000);
@@ -44,11 +44,14 @@ async function main() {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
   });
   const page = await context.newPage();
+  // No global timeout — the MCA portal is slow and we never want to give up waiting
+  page.setDefaultTimeout(0);
+  page.setDefaultNavigationTimeout(0);
 
   try {
     // Step 1: Visit landing page to set cookies, then accept cookie consent
     console.log("Loading landing page...");
-    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
     await page.waitForTimeout(3000);
     await acceptCookies(page);
     await page.waitForTimeout(2000);
@@ -57,7 +60,7 @@ async function main() {
 
     // Step 2: Navigate directly to SDS entry page (skip clicking "Start now")
     console.log("Navigating directly to SDS entry page...");
-    await page.goto(SDS_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.goto(SDS_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
     await page.waitForTimeout(3000);
     // Accept cookies again if they re-appear after navigation
     await acceptCookies(page);
@@ -68,7 +71,7 @@ async function main() {
     // If we were redirected away, try the landing page flow as fallback
     if (!page.url().includes("enter-your-seafarer-reference-number")) {
       console.log("Redirected away from SDS page. Trying landing page CTA click...");
-      await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+      await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
       await page.waitForTimeout(5000);
       await acceptCookies(page);
       await page.waitForTimeout(3000);
@@ -82,14 +85,14 @@ async function main() {
       ];
       for (const sel of ctaSelectors) {
         const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+        if (await el.isVisible({ timeout: 60000 }).catch(() => false)) {
           console.log(`Clicking CTA: ${sel}`);
           await el.click();
           break;
         }
       }
       // Wait generously for navigation
-      await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 45000 }).catch(() => {});
+      await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 120000 }).catch(() => {});
       await page.waitForTimeout(3000);
       console.log("After CTA fallback — URL:", page.url());
       await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
@@ -120,7 +123,7 @@ async function main() {
     let sdsFilled = false;
     for (const sel of sdsSelectors) {
       const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+      if (await el.isVisible({ timeout: 60000 }).catch(() => false)) {
         await el.fill(MCA_SDS_NUMBER);
         console.log(`Filled SDS using: ${sel}`);
         sdsFilled = true;
@@ -134,7 +137,7 @@ async function main() {
         .locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])")
         .first();
       console.log("Waiting for any visible input (up to 30s)...");
-      await firstInput.waitFor({ timeout: 30000 });
+      await firstInput.waitFor({ timeout: 120000 });
       await firstInput.fill(MCA_SDS_NUMBER);
       console.log("Filled SDS using first available input");
     }
@@ -150,14 +153,14 @@ async function main() {
     ];
     for (const sel of submitSelectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
         await btn.click();
         console.log(`Clicked submit via: ${sel}`);
         break;
       }
     }
 
-    await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
     await page.waitForTimeout(3000);
     console.log("After SDS submit — URL:", page.url());
     await page.screenshot({ path: `screenshot-after-sds-${Date.now()}.png`, fullPage: true });
@@ -182,7 +185,7 @@ async function main() {
       }
 
       const dayInput = page.locator('input[name*="day" i], input[id*="day" i], input[aria-label*="day" i]').first();
-      if (await dayInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+      if (await dayInput.isVisible({ timeout: 60000 }).catch(() => false)) {
         await dayInput.fill(dobDay);
         console.log(`Filled Day: ${dobDay}`);
       } else {
@@ -191,7 +194,7 @@ async function main() {
       }
 
       const monthInput = page.locator('input[name*="month" i], input[id*="month" i], input[aria-label*="month" i]').first();
-      if (await monthInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+      if (await monthInput.isVisible({ timeout: 60000 }).catch(() => false)) {
         await monthInput.fill(dobMonth);
         console.log(`Filled Month: ${dobMonth}`);
       } else {
@@ -200,7 +203,7 @@ async function main() {
       }
 
       const yearInput = page.locator('input[name*="year" i], input[id*="year" i], input[aria-label*="year" i]').first();
-      if (await yearInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+      if (await yearInput.isVisible({ timeout: 60000 }).catch(() => false)) {
         await yearInput.fill(dobYear);
         console.log(`Filled Year: ${dobYear}`);
       } else {
@@ -211,14 +214,14 @@ async function main() {
       // Submit DOB form
       for (const sel of submitSelectors) {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
           await btn.click();
           console.log(`Clicked DOB submit via: ${sel}`);
           break;
         }
       }
 
-      await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+      await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
       await page.waitForTimeout(3000);
       const afterDobUrl = page.url();
       console.log("After DOB submit — URL:", afterDobUrl);
@@ -343,7 +346,7 @@ async function extractAllWeeks(page: any, targetDate: string): Promise<string[]>
     let clicked = false;
     for (const sel of nextBtnSelectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
         await btn.click();
         clicked = true;
         console.log(`Clicked next week via: ${sel}`);
@@ -357,7 +360,7 @@ async function extractAllWeeks(page: any, targetDate: string): Promise<string[]>
     }
 
     // Wait for the new week to load
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
     await page.waitForTimeout(1500);
   }
 
