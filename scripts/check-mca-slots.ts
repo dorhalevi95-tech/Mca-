@@ -239,10 +239,10 @@ async function main() {
     await page.screenshot({ path: `screenshot-final-${Date.now()}.png`, fullPage: true });
     console.log("Final URL:", page.url());
 
-    // Step 5: Extract available slots
+    // Step 5: Walk through every week up to TARGET_DATE and collect all slots
     const pageContent = await page.content();
-    const slots = await extractSlots(page);
-    console.log(`Found ${slots.length} available slot(s):`, slots);
+    const slots = await extractAllWeeks(page, TARGET_DATE);
+    console.log(`Found ${slots.length} available slot(s) across all weeks:`, slots);
 
     const { error: insertErr } = await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
@@ -298,53 +298,87 @@ async function main() {
   }
 }
 
-async function extractSlots(page: any): Promise<string[]> {
-  const slots: string[] = [];
+// Walk through every week on the calendar, clicking "next week" until we reach
+// or pass targetDate. Collects all available slot dates found along the way.
+async function extractAllWeeks(page: any, targetDate: string): Promise<string[]> {
+  const targetMs = new Date(targetDate).getTime();
+  const allSlots: string[] = [];
+  const MAX_WEEKS = 30; // safety cap (~7 months of weekly clicks)
 
-  const dateEls = await page
-    .locator('[class*="calendar"] [class*="day"]:not([class*="disabled"]):not([class*="past"])')
-    .all();
-  for (const el of dateEls) {
-    const text = await el.textContent().catch(() => "");
-    if (text?.trim()) slots.push(text.trim());
-  }
+  // Selectors for the "next week / next" navigation button on the MCA calendar
+  const nextBtnSelectors = [
+    'button:has-text("Next week")',
+    'button:has-text("Next Week")',
+    'button[aria-label*="next" i]',
+    'a:has-text("Next week")',
+    'a:has-text("Next")',
+    '[class*="next"]:not([disabled])',
+    'button:has-text("›")',
+    'button:has-text(">")',
+  ];
 
-  if (slots.length === 0) {
-    const options = await page.locator('select option, [role="option"]').all();
-    for (const opt of options) {
-      const text = await opt.textContent().catch(() => "");
-      if (
-        text &&
-        /\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}|\d{4}-\d{2}-\d{2}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec/i.test(
-          text
-        )
-      ) {
-        slots.push(text.trim());
+  for (let week = 0; week < MAX_WEEKS; week++) {
+    // Read the current week's page text once
+    const bodyText = await page.locator("body").innerText().catch(() => "");
+
+    // Determine the latest date visible on this week's view so we know when to stop
+    const visibleDates = extractDatesFromText(bodyText);
+    const weekSlots = extractAvailableSlots(bodyText);
+
+    console.log(`Week ${week + 1}: visible dates [${visibleDates.slice(0, 3).join(", ")}...], available slots: [${weekSlots.join(", ")}]`);
+    allSlots.push(...weekSlots);
+
+    // If the latest visible date has passed targetDate, we've covered everything
+    const latestVisible = visibleDates.reduce<number>((max, d) => {
+      const t = new Date(d).getTime();
+      return isNaN(t) ? max : Math.max(max, t);
+    }, 0);
+
+    if (latestVisible >= targetMs) {
+      console.log(`Reached/passed target date ${targetDate} — stopping week navigation.`);
+      break;
+    }
+
+    // Find and click the "next week" button
+    let clicked = false;
+    for (const sel of nextBtnSelectors) {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await btn.click();
+        clicked = true;
+        console.log(`Clicked next week via: ${sel}`);
+        break;
       }
     }
-  }
 
-  if (slots.length === 0) {
-    const buttons = await page
-      .locator(
-        'button:has-text("available"), [class*="slot"]:not([class*="taken"]):not([class*="disabled"])'
-      )
-      .all();
-    for (const btn of buttons) {
-      const text = await btn.textContent().catch(() => "");
-      if (text?.trim()) slots.push(text.trim());
+    if (!clicked) {
+      console.log("No 'next week' button found — portal may not have a navigable calendar yet, or we reached the end.");
+      break;
     }
+
+    // Wait for the new week to load
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1500);
   }
 
-  if (slots.length === 0) {
-    const bodyText = await page.locator("body").innerText().catch(() => "");
-    const datePattern =
-      /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2})\b/gi;
-    const matches = bodyText.match(datePattern) ?? [];
-    slots.push(...[...new Set(matches)]);
-  }
+  const unique = [...new Set(allSlots)];
+  console.log(`Total unique slots found across all weeks: ${unique.length}`);
+  return unique;
+}
 
-  return [...new Set(slots)];
+// Pull all date-like strings from page body text
+function extractDatesFromText(text: string): string[] {
+  const pattern = /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/gi;
+  return [...new Set((text.match(pattern) ?? []).map((s) => s.trim()))];
+}
+
+// Pull only the available (non-disabled, non-past) slot dates
+function extractAvailableSlots(bodyText: string): string[] {
+  // The MCA portal shows available slots as clickable dates.
+  // We extract any date string that appears in the text — once we can actually
+  // reach the booking page we'll refine this with DOM selectors.
+  // For now, extract all unique date strings as candidates.
+  return extractDatesFromText(bodyText);
 }
 
 function parseSlotDate(slotLabel: string): Date | null {
