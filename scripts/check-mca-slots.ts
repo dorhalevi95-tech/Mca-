@@ -184,32 +184,27 @@ async function main() {
         console.log(`  INPUT name="${name}" id="${id}"`);
       }
 
-      const dayInput = page.locator('input[name*="day" i], input[id*="day" i], input[aria-label*="day" i]').first();
-      if (await dayInput.isVisible({ timeout: 60000 }).catch(() => false)) {
-        await dayInput.fill(dobDay);
-        console.log(`Filled Day: ${dobDay}`);
-      } else {
-        await page.locator("input:not([type='hidden'])").nth(0).fill(dobDay);
-        console.log(`Filled Day (fallback): ${dobDay}`);
-      }
+      // Use pressSequentially so the portal's JS validation events fire on each keystroke
+      const typeInto = async (locator: any, value: string, label: string) => {
+        await locator.click();
+        await locator.selectText().catch(() => {});
+        await page.keyboard.press("Control+a");
+        await page.keyboard.press("Delete");
+        await locator.pressSequentially(value, { delay: 80 });
+        console.log(`Typed ${label}: "${value}"`);
+      };
 
-      const monthInput = page.locator('input[name*="month" i], input[id*="month" i], input[aria-label*="month" i]').first();
-      if (await monthInput.isVisible({ timeout: 60000 }).catch(() => false)) {
-        await monthInput.fill(dobMonth);
-        console.log(`Filled Month: ${dobMonth}`);
-      } else {
-        await page.locator("input:not([type='hidden'])").nth(1).fill(dobMonth);
-        console.log(`Filled Month (fallback): ${dobMonth}`);
-      }
+      const dayInput = page.locator("#dob-day, input[name='dob-day'], input[name*='day' i]").first();
+      await typeInto(dayInput, dobDay, "Day");
+      await page.waitForTimeout(300);
 
-      const yearInput = page.locator('input[name*="year" i], input[id*="year" i], input[aria-label*="year" i]').first();
-      if (await yearInput.isVisible({ timeout: 60000 }).catch(() => false)) {
-        await yearInput.fill(dobYear);
-        console.log(`Filled Year: ${dobYear}`);
-      } else {
-        await page.locator("input:not([type='hidden'])").nth(2).fill(dobYear);
-        console.log(`Filled Year (fallback): ${dobYear}`);
-      }
+      const monthInput = page.locator("#dob-month, input[name='dob-month'], input[name*='month' i]").first();
+      await typeInto(monthInput, dobMonth, "Month");
+      await page.waitForTimeout(300);
+
+      const yearInput = page.locator("#dob-year, input[name='dob-year'], input[name*='year' i]").first();
+      await typeInto(yearInput, dobYear, "Year");
+      await page.waitForTimeout(500);
 
       // Submit DOB form
       for (const sel of submitSelectors) {
@@ -236,6 +231,7 @@ async function main() {
         console.warn(`Check MCA_DOB secret is DD/MM/YYYY (e.g. 25/06/1990)`);
         const bodyText = await page.locator("body").innerText().catch(() => "");
         console.log("DOB page body:", bodyText.slice(0, 800));
+        throw new Error(`DOB rejected by portal — "${errorText.trim() || "There is a problem"}". Verify MCA_DOB secret format is DD/MM/YYYY.`);
       }
     }
 
