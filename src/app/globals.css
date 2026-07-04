@@ -1,3 +1,6 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Strip Tailwind's body defaults so our CSS vars control the bg */
+body { margin: 0; padding: 0; }
