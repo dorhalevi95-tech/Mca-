@@ -184,27 +184,34 @@ async function main() {
         console.log(`  INPUT name="${name}" id="${id}"`);
       }
 
-      // Use pressSequentially so the portal's JS validation events fire on each keystroke
-      const typeInto = async (locator: any, value: string, label: string) => {
-        await locator.click();
-        await locator.selectText().catch(() => {});
-        await page.keyboard.press("Control+a");
-        await page.keyboard.press("Delete");
-        await locator.pressSequentially(value, { delay: 80 });
-        console.log(`Typed ${label}: "${value}"`);
-      };
-
-      const dayInput = page.locator("#dob-day, input[name='dob-day'], input[name*='day' i]").first();
-      await typeInto(dayInput, dobDay, "Day");
+      // Click day, type, Tab to month, type, Tab to year, type — fires all browser events
+      const dayInput = page.locator("#dob-day").first();
+      await dayInput.click();
+      await page.keyboard.press("Control+a");
+      await page.keyboard.type(dobDay, { delay: 100 });
+      console.log(`Typed Day: "${dobDay}"`);
+      await page.keyboard.press("Tab");
       await page.waitForTimeout(300);
 
-      const monthInput = page.locator("#dob-month, input[name='dob-month'], input[name*='month' i]").first();
-      await typeInto(monthInput, dobMonth, "Month");
+      // After Tab focus should be on month
+      await page.keyboard.press("Control+a");
+      await page.keyboard.type(dobMonth, { delay: 100 });
+      console.log(`Typed Month: "${dobMonth}"`);
+      await page.keyboard.press("Tab");
       await page.waitForTimeout(300);
 
-      const yearInput = page.locator("#dob-year, input[name='dob-year'], input[name*='year' i]").first();
-      await typeInto(yearInput, dobYear, "Year");
+      // After Tab focus should be on year
+      await page.keyboard.press("Control+a");
+      await page.keyboard.type(dobYear, { delay: 100 });
+      console.log(`Typed Year: "${dobYear}"`);
+      await page.keyboard.press("Tab"); // blur year field to fire validation
       await page.waitForTimeout(500);
+
+      // Log current values for debugging
+      const dayVal = await page.locator("#dob-day").inputValue().catch(() => "?");
+      const monVal = await page.locator("#dob-month").inputValue().catch(() => "?");
+      const yrVal  = await page.locator("#dob-year").inputValue().catch(() => "?");
+      console.log(`Field values after typing — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
 
       // Submit DOB form
       for (const sel of submitSelectors) {
