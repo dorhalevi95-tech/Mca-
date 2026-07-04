@@ -243,15 +243,15 @@ async function main() {
     console.log("Final URL:", page.url());
 
     // Step 5: Walk through every week up to TARGET_DATE and collect all slots
-    const pageContent = await page.content();
-    const slots = await extractAllWeeks(page, TARGET_DATE);
-    console.log(`Found ${slots.length} available slot(s) across all weeks:`, slots);
+    const { slots, weeks } = await extractAllWeeks(page, TARGET_DATE);
+    console.log(`Found ${slots.length} available slot(s) across ${weeks.length} weeks:`, slots);
 
     const { error: insertErr } = await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
       slots_found: slots,
       slot_count: slots.length,
-      page_snapshot: pageContent.slice(0, 5000),
+      // Store per-week breakdown as JSON in page_snapshot
+      page_snapshot: JSON.stringify(weeks),
     });
     if (insertErr) console.error("Supabase insert error:", insertErr);
 
@@ -301,14 +301,22 @@ async function main() {
   }
 }
 
-// Walk through every week on the calendar, clicking "next week" until we reach
-// or pass targetDate. Collects all available slot dates found along the way.
-async function extractAllWeeks(page: any, targetDate: string): Promise<string[]> {
-  const targetMs = new Date(targetDate).getTime();
-  const allSlots: string[] = [];
-  const MAX_WEEKS = 30; // safety cap (~7 months of weekly clicks)
+type WeekResult = {
+  weekNum: number;       // 1-based week index
+  dateRange: string;     // e.g. "3 Jul – 9 Jul 2025"
+  slots: string[];       // available slot dates found this week
+};
 
-  // Selectors for the "next week / next" navigation button on the MCA calendar
+// Walk through every week on the calendar, clicking "next week" until we reach
+// or pass targetDate. Returns all unique slots AND a per-week breakdown.
+async function extractAllWeeks(
+  page: any,
+  targetDate: string
+): Promise<{ slots: string[]; weeks: WeekResult[] }> {
+  const targetMs = new Date(targetDate).getTime();
+  const weeks: WeekResult[] = [];
+  const MAX_WEEKS = 30; // safety cap (~7 months)
+
   const nextBtnSelectors = [
     'button:has-text("Next week")',
     'button:has-text("Next Week")',
@@ -320,29 +328,38 @@ async function extractAllWeeks(page: any, targetDate: string): Promise<string[]>
     'button:has-text(">")',
   ];
 
-  for (let week = 0; week < MAX_WEEKS; week++) {
-    // Read the current week's page text once
+  for (let w = 0; w < MAX_WEEKS; w++) {
     const bodyText = await page.locator("body").innerText().catch(() => "");
-
-    // Determine the latest date visible on this week's view so we know when to stop
     const visibleDates = extractDatesFromText(bodyText);
     const weekSlots = extractAvailableSlots(bodyText);
 
-    console.log(`Week ${week + 1}: visible dates [${visibleDates.slice(0, 3).join(", ")}...], available slots: [${weekSlots.join(", ")}]`);
-    allSlots.push(...weekSlots);
+    // Build a human-readable date range label from the visible dates
+    const sorted = visibleDates
+      .map((d) => new Date(d))
+      .filter((d) => !isNaN(d.getTime()))
+      .sort((a, b) => a.getTime() - b.getTime());
 
-    // If the latest visible date has passed targetDate, we've covered everything
-    const latestVisible = visibleDates.reduce<number>((max, d) => {
-      const t = new Date(d).getTime();
-      return isNaN(t) ? max : Math.max(max, t);
-    }, 0);
+    const fmt = (d: Date) =>
+      d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    const dateRange =
+      sorted.length >= 2
+        ? `${fmt(sorted[0])} – ${fmt(sorted[sorted.length - 1])}`
+        : sorted.length === 1
+        ? fmt(sorted[0])
+        : "unknown week";
 
+    const result: WeekResult = { weekNum: w + 1, dateRange, slots: weekSlots };
+    weeks.push(result);
+    console.log(`Week ${w + 1} [${dateRange}]: ${weekSlots.length} slot(s) — [${weekSlots.join(", ")}]`);
+
+    // Stop once the latest visible date has reached or passed target
+    const latestVisible = sorted.length ? sorted[sorted.length - 1].getTime() : 0;
     if (latestVisible >= targetMs) {
-      console.log(`Reached/passed target date ${targetDate} — stopping week navigation.`);
+      console.log(`Reached/passed target date ${targetDate} — done.`);
       break;
     }
 
-    // Find and click the "next week" button
+    // Click "next week"
     let clicked = false;
     for (const sel of nextBtnSelectors) {
       const btn = page.locator(sel).first();
@@ -355,32 +372,26 @@ async function extractAllWeeks(page: any, targetDate: string): Promise<string[]>
     }
 
     if (!clicked) {
-      console.log("No 'next week' button found — portal may not have a navigable calendar yet, or we reached the end.");
+      console.log("No 'next week' button found — stopping.");
       break;
     }
 
-    // Wait for the new week to load
     await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
     await page.waitForTimeout(1500);
   }
 
-  const unique = [...new Set(allSlots)];
-  console.log(`Total unique slots found across all weeks: ${unique.length}`);
-  return unique;
+  const allSlots = [...new Set(weeks.flatMap((w) => w.slots))];
+  console.log(`Total unique slots across all weeks: ${allSlots.length}`);
+  return { slots: allSlots, weeks };
 }
 
-// Pull all date-like strings from page body text
 function extractDatesFromText(text: string): string[] {
-  const pattern = /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/gi;
+  const pattern =
+    /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\b/gi;
   return [...new Set((text.match(pattern) ?? []).map((s) => s.trim()))];
 }
 
-// Pull only the available (non-disabled, non-past) slot dates
 function extractAvailableSlots(bodyText: string): string[] {
-  // The MCA portal shows available slots as clickable dates.
-  // We extract any date string that appears in the text — once we can actually
-  // reach the booking page we'll refine this with DOM selectors.
-  // For now, extract all unique date strings as candidates.
   return extractDatesFromText(bodyText);
 }
 
