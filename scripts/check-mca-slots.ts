@@ -184,34 +184,42 @@ async function main() {
         console.log(`  INPUT name="${name}" id="${id}"`);
       }
 
-      // Click day, type, Tab to month, type, Tab to year, type — fires all browser events
-      const dayInput = page.locator("#dob-day").first();
-      await dayInput.click();
-      await page.keyboard.press("Control+a");
-      await page.keyboard.type(dobDay, { delay: 100 });
-      console.log(`Typed Day: "${dobDay}"`);
-      await page.keyboard.press("Tab");
-      await page.waitForTimeout(300);
+      // Helper: fill a single input via native DOM events (works with React/Angular/jQuery portals)
+      async function fillNative(selector: string, value: string) {
+        await page.locator(selector).first().click();
+        await page.waitForTimeout(100);
+        // Set value via JS and dispatch the full chain of events portals listen for
+        await page.evaluate(({ sel, val }: { sel: string; val: string }) => {
+          const el = document.querySelector(sel) as HTMLInputElement | null;
+          if (!el) return;
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, "value"
+          )?.set;
+          if (nativeInputValueSetter) nativeInputValueSetter.call(el, val);
+          else el.value = val;
+          el.dispatchEvent(new Event("input",  { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent("keydown",  { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent("keyup",    { bubbles: true }));
+          el.dispatchEvent(new FocusEvent("blur",  { bubbles: true }));
+        }, { sel: selector, val: value });
+        await page.waitForTimeout(200);
+      }
 
-      // After Tab focus should be on month
-      await page.keyboard.press("Control+a");
-      await page.keyboard.type(dobMonth, { delay: 100 });
-      console.log(`Typed Month: "${dobMonth}"`);
-      await page.keyboard.press("Tab");
-      await page.waitForTimeout(300);
-
-      // After Tab focus should be on year
-      await page.keyboard.press("Control+a");
-      await page.keyboard.type(dobYear, { delay: 100 });
-      console.log(`Typed Year: "${dobYear}"`);
-      await page.keyboard.press("Tab"); // blur year field to fire validation
+      await fillNative("#dob-day",   dobDay);
+      console.log(`Filled Day: "${dobDay}"`);
+      await fillNative("#dob-month", dobMonth);
+      console.log(`Filled Month: "${dobMonth}"`);
+      await fillNative("#dob-year",  dobYear);
+      console.log(`Filled Year: "${dobYear}"`);
       await page.waitForTimeout(500);
 
       // Log current values for debugging
       const dayVal = await page.locator("#dob-day").inputValue().catch(() => "?");
       const monVal = await page.locator("#dob-month").inputValue().catch(() => "?");
       const yrVal  = await page.locator("#dob-year").inputValue().catch(() => "?");
-      console.log(`Field values after typing — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
+      console.log(`Field values after filling — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
 
       // Submit DOB form
       for (const sel of submitSelectors) {
