@@ -503,10 +503,9 @@ function extractWeekViewSlots(bodyText: string): { slots: string[]; dateRange: s
     return { slots: [], dateRange: "page scanned", hadWeekView: false };
   }
 
-  // Guess the year: use TARGET_DATE env or current year
-  const targetYear = process.env.TARGET_DATE
-    ? parseInt(process.env.TARGET_DATE.slice(0, 4), 10)
-    : new Date().getFullYear();
+  // Infer year from current date: if the parsed date would fall in the past, bump by 1 year.
+  // This handles the common case where the portal omits the year from date lines.
+  const now = new Date();
 
   // Collect (date, slotCount) pairs
   type DayEntry = { label: string; date: Date; count: number };
@@ -524,7 +523,9 @@ function extractWeekViewSlots(bodyText: string): { slots: string[]; dateRange: s
     const monthStr = dateMatch[2];
     const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase().startsWith(monthStr.toLowerCase().slice(0, 3)));
     if (monthIdx === -1) continue;
-    const year = dateMatch[3] ? parseInt(dateMatch[3], 10) : targetYear;
+    let year = dateMatch[3] ? parseInt(dateMatch[3], 10) : now.getFullYear();
+    // If the date without an explicit year falls in the past, it must be next year
+    if (!dateMatch[3] && new Date(year, monthIdx, day) < now) year += 1;
     const date = new Date(year, monthIdx, day);
     if (isNaN(date.getTime())) continue;
 
@@ -547,18 +548,28 @@ function extractWeekViewSlots(bodyText: string): { slots: string[]; dateRange: s
   const sorted = [...entries].sort((a, b) => a.date.getTime() - b.date.getTime());
   const dateRange = `${sorted[0].label} – ${sorted[sorted.length - 1].label}`;
 
-  // Extract available times from "Available slots" section
-  const availIdx = lines.findIndex((l) => /^available\s+slots?$/i.test(l));
+  // Extract available times from "Available slots" section (line containing "available slot")
+  // Also scan ALL lines for HH:MM patterns in case the section header differs
+  const availIdx = lines.findIndex((l) => /available\s+slot/i.test(l));
   const availTimes: string[] = [];
   if (availIdx !== -1) {
     for (let j = availIdx + 1; j < lines.length; j++) {
       if (/^\d{1,2}:\d{2}$/.test(lines[j])) {
         availTimes.push(lines[j]);
-      } else if (lines[j] !== "") {
-        break; // end of time list
+      } else if (availTimes.length > 0) {
+        break; // stop after we've collected times and hit non-time content
       }
     }
   }
+  // Fallback: collect any HH:MM lines from the whole page body
+  if (availTimes.length === 0) {
+    for (const l of lines) {
+      if (/^\d{1,2}:\d{2}$/.test(l) && !DAY_NAMES.includes(l)) {
+        availTimes.push(l);
+      }
+    }
+  }
+  console.log("Available times extracted:", availTimes);
 
   // Build slot strings for days with available slots.
   // When we don't know which times belong to which day, we use all listed times
