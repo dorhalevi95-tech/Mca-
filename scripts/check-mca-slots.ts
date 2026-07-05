@@ -8,7 +8,7 @@ const MCA_SDS_NUMBER = process.env.MCA_SDS_NUMBER!;
 const MCA_DOB = process.env.MCA_DOB!;
 const RESEND_API_KEY = process.env.RESEND_API_KEY!;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL!;
-const TARGET_DATE = process.env.TARGET_DATE ?? "2025-11-25";
+const TARGET_DATE = process.env.TARGET_DATE ?? "2026-11-25";
 
 const SDS_URL = "https://mymca-prod.powerappsportals.com/enter-your-seafarer-reference-number/";
 const LANDING_URL = "https://mymca-prod.powerappsportals.com/book_and_manage_an_oral_exam/";
@@ -245,34 +245,66 @@ async function main() {
       }
     }
 
-    // Step 5: Navigate to the exam booking/calendar page (we're authenticated now)
+    // Step 5: Navigate through the portal to reach the booking calendar
+    // Flow: Dashboard → click "Exams" → click exam link → click "Change time or date"
+    // IMPORTANT: never click "Cancel exam booking"
     console.log("Post-login URL:", page.url());
-    // Navigate directly to the booking page — this is the page with the weekly calendar
-    console.log("Navigating to booking page...");
-    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
-    await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
-    await page.waitForTimeout(3000);
-    console.log("Booking page URL:", page.url());
-    await page.screenshot({ path: `screenshot-booking-${Date.now()}.png`, fullPage: true });
-    const bookingBody = await page.locator("body").innerText().catch(() => "");
-    console.log("Booking page content (first 2000 chars):", bookingBody.slice(0, 2000));
+    await page.screenshot({ path: `screenshot-dashboard-${Date.now()}.png`, fullPage: true });
 
-    // Log all buttons on the page to find the "Next week" button text
-    const allBtns = await page.locator("button").all();
-    console.log(`Buttons on booking page (${allBtns.length} total):`);
-    for (const btn of allBtns.slice(0, 20)) {
-      const txt = await btn.innerText().catch(() => "");
-      const aria = await btn.getAttribute("aria-label").catch(() => "");
-      console.log(`  BUTTON text="${txt.trim()}" aria-label="${aria}"`);
+    async function clickVisible(selectors: string[], label: string): Promise<boolean> {
+      for (const sel of selectors) {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 15000 }).catch(() => false)) {
+          console.log(`Clicking ${label} via: ${sel}`);
+          await el.click();
+          await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+          await page.waitForTimeout(2000);
+          console.log(`After ${label} click — URL: ${page.url()}`);
+          return true;
+        }
+      }
+      console.log(`Could not find ${label}`);
+      return false;
     }
 
-    // Log all links on the page too
-    const allLinks = await page.locator("a").all();
-    console.log(`Links on booking page (${allLinks.length} total):`);
-    for (const a of allLinks.slice(0, 20)) {
-      const txt = await a.innerText().catch(() => "");
-      const href = await a.getAttribute("href").catch(() => "");
-      console.log(`  LINK text="${txt.trim()}" href="${href}"`);
+    // Step 5a: Click "Exams" card on dashboard
+    await clickVisible([
+      'a:has-text("Exams")',
+      '.card:has-text("Exams")',
+      'a[href*="exam"]',
+      'text=Book or manage exams',
+    ], "Exams card");
+    await page.screenshot({ path: `screenshot-exams-${Date.now()}.png`, fullPage: true });
+
+    // Step 5b: Click the exam type link (e.g. "Small Vessel - Chief Engineer...")
+    await clickVisible([
+      'a:has-text("Chief Engineer")',
+      'a:has-text("Small Vessel")',
+      'a:has-text("Oral exam")',
+      '.govuk-table__row a',
+      'table a',
+    ], "exam type link");
+    await page.screenshot({ path: `screenshot-manage-${Date.now()}.png`, fullPage: true });
+
+    // Step 5c: Click "Change time or date" — NEVER "Cancel exam booking"
+    const changedToCalendar = await clickVisible([
+      'a:has-text("Change time or date")',
+      'button:has-text("Change time or date")',
+    ], "Change time or date");
+
+    if (!changedToCalendar) {
+      const bodySnap = await page.locator("body").innerText().catch(() => "");
+      console.log("Page content after exam link click:", bodySnap.slice(0, 1500));
+    }
+    await page.screenshot({ path: `screenshot-calendar-${Date.now()}.png`, fullPage: true });
+    console.log("Calendar page URL:", page.url());
+
+    // Log all buttons to help debug week navigation
+    const allBtns = await page.locator("button").all();
+    console.log(`Buttons on page (${allBtns.length}):`);
+    for (const btn of allBtns.slice(0, 30)) {
+      const txt = await btn.innerText().catch(() => "");
+      console.log(`  BUTTON: "${txt.trim()}"`);
     }
 
     // Step 6: Walk through every week up to TARGET_DATE and collect all slots
