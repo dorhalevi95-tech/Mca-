@@ -548,49 +548,17 @@ function extractWeekViewSlots(bodyText: string): { slots: string[]; dateRange: s
   const sorted = [...entries].sort((a, b) => a.date.getTime() - b.date.getTime());
   const dateRange = `${sorted[0].label} – ${sorted[sorted.length - 1].label}`;
 
-  // Extract available times from "Available slots" section (line containing "available slot")
-  // Also scan ALL lines for HH:MM patterns in case the section header differs
-  const availIdx = lines.findIndex((l) => /available\s+slot/i.test(l));
-  const availTimes: string[] = [];
-  if (availIdx !== -1) {
-    for (let j = availIdx + 1; j < lines.length; j++) {
-      if (/^\d{1,2}:\d{2}$/.test(lines[j])) {
-        availTimes.push(lines[j]);
-      } else if (availTimes.length > 0) {
-        break; // stop after we've collected times and hit non-time content
-      }
-    }
-  }
-  // Fallback: collect any HH:MM lines from the whole page body
-  if (availTimes.length === 0) {
-    for (const l of lines) {
-      if (/^\d{1,2}:\d{2}$/.test(l) && !DAY_NAMES.includes(l)) {
-        availTimes.push(l);
-      }
-    }
-  }
-  console.log("Available times extracted:", availTimes);
-
-  // Build slot strings for days with available slots.
-  // When we don't know which times belong to which day, we use all listed times
-  // for each day that has slots (conservative: maximises chance of detection).
+  // Build slot strings for days with available slots — date only, no time needed.
   const slots: string[] = [];
   for (const entry of entries) {
     if (entry.count <= 0) continue;
     const day = entry.date.getDate();
     const month = MONTH_NAMES[entry.date.getMonth()];
     const year = entry.date.getFullYear();
-    if (availTimes.length > 0) {
-      for (const t of availTimes) {
-        slots.push(`${day} ${month} ${year} ${t}`);
-      }
-    } else {
-      // No times listed — use midnight as a sentinel (date comparison still works)
-      slots.push(`${day} ${month} ${year} 00:00`);
-    }
+    slots.push(`${day} ${month} ${year}`);
   }
 
-  console.log(`Week view parsed: ${entries.length} days, ${entries.filter(e=>e.count>0).length} with slots, ${availTimes.length} times listed`);
+  console.log(`Week view parsed: ${entries.length} days, ${entries.filter(e=>e.count>0).length} with slots`);
   return { slots: [...new Set(slots)], dateRange, hadWeekView: true };
 }
 
@@ -621,13 +589,10 @@ function extractAvailableSlots(bodyText: string): string[] {
 }
 
 function parseSlotDate(slotLabel: string): Date | null {
-  // Handle "8 December 2026 09:00" — our week-view slot format
-  const weekViewMatch = slotLabel.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})(?:\s+(\d{1,2}:\d{2}))?$/);
+  // Handle "8 December 2026" — our week-view slot format
+  const weekViewMatch = slotLabel.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
   if (weekViewMatch) {
-    const str = weekViewMatch[4]
-      ? `${weekViewMatch[2]} ${weekViewMatch[1]}, ${weekViewMatch[3]} ${weekViewMatch[4]}`
-      : `${weekViewMatch[2]} ${weekViewMatch[1]}, ${weekViewMatch[3]}`;
-    const d = new Date(str);
+    const d = new Date(`${weekViewMatch[2]} ${weekViewMatch[1]}, ${weekViewMatch[3]}`);
     if (!isNaN(d.getTime())) return d;
   }
   // Try direct parse first
