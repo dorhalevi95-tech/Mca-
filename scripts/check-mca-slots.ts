@@ -160,7 +160,7 @@ async function main() {
       }
     }
 
-    await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+    await page.waitForTimeout(4000);
     await page.waitForTimeout(3000);
     console.log("After SDS submit — URL:", page.url());
     await page.screenshot({ path: `screenshot-after-sds-${Date.now()}.png`, fullPage: true });
@@ -292,7 +292,7 @@ async function main() {
         if (await el.isVisible({ timeout: 15000 }).catch(() => false)) {
           console.log(`Clicking ${label} via: ${sel}`);
           await el.click();
-          await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+          await page.waitForTimeout(4000);
           await page.waitForTimeout(2000);
           console.log(`After ${label} click — URL: ${page.url()}`);
           return true;
@@ -363,7 +363,7 @@ async function main() {
     if (await showEarliestBtn.isVisible({ timeout: 10000 }).catch(() => false)) {
       await showEarliestBtn.click();
       await page.waitForTimeout(3000);
-      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(4000);
     } else {
       console.log("Show earliest button not found — reading page as-is");
     }
