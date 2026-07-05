@@ -21,6 +21,7 @@ export function CheckRow({
   checkedAt,
   pageSnapshot,
   index,
+  targetDate,
 }: {
   error: string | null;
   slotCount: number;
@@ -28,11 +29,21 @@ export function CheckRow({
   checkedAt: string;
   pageSnapshot: string | null;
   index: number;
+  targetDate: string;
 }) {
   const [open, setOpen] = useState(false);
   const failed = !!error;
   const weeks = parseWeeks(pageSnapshot);
   const hasWeeks = weeks && weeks.length > 0;
+
+  // Only show amber/slot colour when slots are genuinely earlier than the booking
+  const targetMs = new Date(targetDate).getTime();
+  const todayMs = new Date().setHours(0, 0, 0, 0);
+  const earlierCount = slotsFound.filter((s) => {
+    const d = new Date(s);
+    return !isNaN(d.getTime()) && d.getTime() >= todayMs && d.getTime() < targetMs;
+  }).length;
+  const hasEarlier = earlierCount > 0;
 
   const absDate = new Date(checkedAt).toLocaleDateString("en-GB", {
     day: "2-digit", month: "short", year: "numeric",
@@ -55,10 +66,10 @@ export function CheckRow({
   const weeksWithSlots = weeks?.filter((w) => w.slots.length > 0).length ?? 0;
 
   return (
-    <div className={`cr ${failed ? "cr-fail" : slotCount > 0 ? "cr-slot" : "cr-ok"}`}>
+    <div className={`cr ${failed ? "cr-fail" : hasEarlier ? "cr-slot" : ""}`}>
       {/* Main row */}
       <div className="cr-main">
-        <span className={`cr-dot ${failed ? "cd-fail" : slotCount > 0 ? "cd-slot" : "cd-ok"}`} />
+        <span className={`cr-dot ${failed ? "cd-fail" : hasEarlier ? "cd-slot" : "cd-ok"}`} />
 
         <span className="cr-seq">#{String(index + 1).padStart(3, "0")}</span>
 
@@ -78,14 +89,14 @@ export function CheckRow({
               Login error
             </span>
           ) : hasWeeks ? (
-            <span className={slotCount > 0 ? "cr-slots-found" : "cr-no-slots"}>
-              {slotCount > 0
-                ? `${slotCount} open slot${slotCount > 1 ? "s" : ""} across ${weeksWithSlots} week${weeksWithSlots > 1 ? "s" : ""}`
-                : `No open slots · ${totalWeeks} week${totalWeeks > 1 ? "s" : ""} checked`}
+            <span className={hasEarlier ? "cr-slots-found" : "cr-no-slots"}>
+              {hasEarlier
+                ? `${earlierCount} earlier slot${earlierCount > 1 ? "s" : ""} found!`
+                : `No earlier slots · ${totalWeeks} week${totalWeeks > 1 ? "s" : ""} checked`}
             </span>
           ) : (
             <span className="cr-no-slots">
-              {slotCount > 0 ? `${slotCount} slot(s) found` : "No slots found"}
+              {hasEarlier ? `${earlierCount} earlier slot(s) found!` : "No earlier slots"}
             </span>
           )}
         </div>

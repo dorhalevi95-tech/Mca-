@@ -241,12 +241,21 @@ export default async function Home() {
           </div>
         )}
 
-        {/* Notifications */}
-        {notifications.length > 0 && (
+        {/* Notifications — only show alerts for slots still in the future */}
+        {notifications.filter((n) => {
+          const d = new Date(n.slot_label);
+          return isNaN(d.getTime()) || d.getTime() >= Date.now();
+        }).length > 0 && (
           <>
-            <div className="sec-title"><Bell size={10} /> Email alerts sent ({notifications.length})</div>
+            <div className="sec-title"><Bell size={10} /> Email alerts sent ({notifications.filter((n) => {
+              const d = new Date(n.slot_label);
+              return isNaN(d.getTime()) || d.getTime() >= Date.now();
+            }).length})</div>
             <div className="notif-list">
-              {notifications.map((n) => (
+              {notifications.filter((n) => {
+                const d = new Date(n.slot_label);
+                return isNaN(d.getTime()) || d.getTime() >= Date.now();
+              }).map((n) => (
                 <div key={n.id} className="notif-row">
                   <span className="notif-slot">{n.slot_label}</span>
                   <span className="notif-time">{fmtTime(n.notified_at)}</span>
@@ -276,6 +285,7 @@ export default async function Home() {
             slotsFound={c.slots_found ?? []}
             checkedAt={c.checked_at}
             pageSnapshot={c.page_snapshot}
+            targetDate={TARGET_DATE}
           />
         ))}
 
