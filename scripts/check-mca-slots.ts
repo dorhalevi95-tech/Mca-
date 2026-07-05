@@ -175,21 +175,49 @@ async function main() {
       const dobYear  = dobParts[2] ?? "";
       console.log(`Parsed DOB — Day: "${dobDay}" Month: "${dobMonth}" Year: "${dobYear}"`);
 
-      // Fill via native React/framework-compatible events
-      async function fillNative(selector: string, value: string) {
-        await page.locator(selector).first().click();
-        await page.waitForTimeout(150);
-        await page.evaluate(({ sel, val }: { sel: string; val: string }) => {
-          const el = document.querySelector(sel) as HTMLInputElement | null;
-          if (!el) return;
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-          if (setter) setter.call(el, val); else el.value = val;
-          el.dispatchEvent(new Event("focus",  { bubbles: true }));
-          el.dispatchEvent(new Event("input",  { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-        }, { sel: selector, val: value });
+      // Log actual input IDs on the DOB page for debugging
+      const dobInputs = await page.locator("input:not([type='hidden'])").all();
+      console.log(`DOB page inputs (${dobInputs.length}):`);
+      for (const el of dobInputs) {
+        const id   = await el.getAttribute("id").catch(() => "");
+        const name = await el.getAttribute("name").catch(() => "");
+        const type = await el.getAttribute("type").catch(() => "");
+        console.log(`  INPUT id="${id}" name="${name}" type="${type}"`);
+      }
+
+      // Fill a field by clicking into it, clearing it, then typing character-by-character.
+      // This is the most realistic browser-like input and works best with PowerApps portals.
+      async function typeIntoField(selector: string, value: string) {
+        const el = page.locator(selector).first();
+        await el.waitFor({ timeout: 15000 });
+        await el.click();
+        await page.waitForTimeout(200);
+        // Clear any existing value
+        await page.keyboard.press("Control+a");
+        await page.keyboard.press("Delete");
+        await page.waitForTimeout(100);
+        // Type each character with a realistic delay
+        await el.pressSequentially(value, { delay: 120 });
         await page.waitForTimeout(300);
+      }
+
+      // Try both the known IDs and fallback positional selectors
+      const daySelectors   = ["#dob-day",   "input[name*='day' i]",   "input[autocomplete*='bday-day']",   "input:nth-of-type(1)"];
+      const monthSelectors = ["#dob-month", "input[name*='month' i]", "input[autocomplete*='bday-month']", "input:nth-of-type(2)"];
+      const yearSelectors  = ["#dob-year",  "input[name*='year' i]",  "input[autocomplete*='bday-year']",  "input:nth-of-type(3)"];
+
+      async function findAndFill(selectors: string[], value: string, label: string) {
+        for (const sel of selectors) {
+          const el = page.locator(sel).first();
+          if (await el.isVisible({ timeout: 5000 }).catch(() => false)) {
+            await typeIntoField(sel, value);
+            const filled = await el.inputValue().catch(() => "?");
+            console.log(`Filled ${label} via "${sel}" — value: "${filled}"`);
+            return sel;
+          }
+        }
+        console.log(`WARNING: could not find ${label} input`);
+        return null;
       }
 
       // Retry DOB submit up to 3 times — portal backend sometimes transiently rejects
@@ -197,33 +225,36 @@ async function main() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         console.log(`DOB attempt ${attempt}/3`);
 
-        // Wait for page to settle before filling
-        await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
-        await page.waitForTimeout(1500);
-
-        await fillNative("#dob-day",   dobDay);
-        await fillNative("#dob-month", dobMonth);
-        await fillNative("#dob-year",  dobYear);
-        await page.keyboard.press("Tab"); // blur last field
+        // Wait for the day field to be visible (not networkidle — avoids session/CSRF expiry)
+        await page.locator("#dob-day, input[name*='day' i]").first()
+          .waitFor({ timeout: 30000 }).catch(() => {});
         await page.waitForTimeout(500);
 
-        const dayVal = await page.locator("#dob-day").inputValue().catch(() => "?");
-        const monVal = await page.locator("#dob-month").inputValue().catch(() => "?");
-        const yrVal  = await page.locator("#dob-year").inputValue().catch(() => "?");
-        console.log(`Field values — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
+        await findAndFill(daySelectors,   dobDay,   "day");
+        await page.keyboard.press("Tab");
+        await page.waitForTimeout(150);
+        await findAndFill(monthSelectors, dobMonth, "month");
+        await page.keyboard.press("Tab");
+        await page.waitForTimeout(150);
+        await findAndFill(yearSelectors,  dobYear,  "year");
+        await page.keyboard.press("Tab");
+        await page.waitForTimeout(500);
+
         await page.screenshot({ path: `screenshot-dob-attempt${attempt}-${Date.now()}.png`, fullPage: true });
 
         for (const sel of submitSelectors) {
           const btn = page.locator(sel).first();
-          if (await btn.isVisible({ timeout: 30000 }).catch(() => false)) {
+          if (await btn.isVisible({ timeout: 15000 }).catch(() => false)) {
             await btn.click();
             console.log(`Clicked DOB submit via: ${sel}`);
             break;
           }
         }
 
-        await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
-        await page.waitForTimeout(3000);
+        // Wait for navigation — use URL change rather than networkidle
+        await page.waitForURL((url) => !url.toString().includes("date_of_birth") && !url.toString().includes("/dob"), { timeout: 30000 })
+          .catch(() => {});
+        await page.waitForTimeout(2000);
         const afterDobUrl = page.url();
         console.log(`Attempt ${attempt} — After DOB submit URL: ${afterDobUrl}`);
 
@@ -232,9 +263,13 @@ async function main() {
           break;
         }
 
+        // Check for error message
+        const errText = await page.locator(".govuk-error-summary, .error, [class*='error']").first().innerText().catch(() => "");
+        console.log(`DOB error on page: "${errText.slice(0, 200)}"`);
+
         if (attempt < 3) {
-          console.log(`DOB rejected on attempt ${attempt} — waiting 10s before retry...`);
-          await page.waitForTimeout(10000);
+          console.log(`DOB rejected on attempt ${attempt} — waiting 5s before retry...`);
+          await page.waitForTimeout(5000);
         }
       }
 
