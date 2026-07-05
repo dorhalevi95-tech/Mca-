@@ -169,57 +169,49 @@ async function main() {
     if (page.url().includes("date_of_birth") || page.url().includes("dob")) {
       console.log("On DOB page — filling date of birth...");
 
+      // Wait for the page JS to fully initialise before touching inputs
+      await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+
       const dobParts = MCA_DOB.split(/[\/\-\.\s]+/);
-      const dobDay = dobParts[0] ?? "";
+      const dobDay   = dobParts[0] ?? "";
       const dobMonth = dobParts[1] ?? "";
-      const dobYear = dobParts[2] ?? "";
+      const dobYear  = dobParts[2] ?? "";
       console.log(`Parsed DOB — Day: "${dobDay}" Month: "${dobMonth}" Year: "${dobYear}"`);
 
-      // Log inputs for debugging
-      const dobInputs = await page.locator("input:not([type='hidden'])").all();
-      console.log(`DOB page has ${dobInputs.length} inputs:`);
-      for (const el of dobInputs) {
-        const name = await el.getAttribute("name").catch(() => "");
-        const id = await el.getAttribute("id").catch(() => "");
-        console.log(`  INPUT name="${name}" id="${id}"`);
-      }
-
-      // Helper: fill a single input via native DOM events (works with React/Angular/jQuery portals)
-      async function fillNative(selector: string, value: string) {
-        await page.locator(selector).first().click();
+      // Type each field character-by-character like a real user
+      async function typeIntoField(selector: string, value: string) {
+        const el = page.locator(selector).first();
+        await el.click();
+        await page.waitForTimeout(300);
+        await el.selectText().catch(() => {});
+        await page.keyboard.press("Backspace");
         await page.waitForTimeout(100);
-        // Set value via JS and dispatch the full chain of events portals listen for
-        await page.evaluate(({ sel, val }: { sel: string; val: string }) => {
-          const el = document.querySelector(sel) as HTMLInputElement | null;
-          if (!el) return;
-          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-            window.HTMLInputElement.prototype, "value"
-          )?.set;
-          if (nativeInputValueSetter) nativeInputValueSetter.call(el, val);
-          else el.value = val;
-          el.dispatchEvent(new Event("input",  { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          el.dispatchEvent(new KeyboardEvent("keydown",  { bubbles: true }));
-          el.dispatchEvent(new KeyboardEvent("keypress", { bubbles: true }));
-          el.dispatchEvent(new KeyboardEvent("keyup",    { bubbles: true }));
-          el.dispatchEvent(new FocusEvent("blur",  { bubbles: true }));
-        }, { sel: selector, val: value });
-        await page.waitForTimeout(200);
+        for (const char of value) {
+          await page.keyboard.press(char);
+          await page.waitForTimeout(80);
+        }
+        await page.waitForTimeout(300);
       }
 
-      await fillNative("#dob-day",   dobDay);
-      console.log(`Filled Day: "${dobDay}"`);
-      await fillNative("#dob-month", dobMonth);
-      console.log(`Filled Month: "${dobMonth}"`);
-      await fillNative("#dob-year",  dobYear);
-      console.log(`Filled Year: "${dobYear}"`);
-      await page.waitForTimeout(500);
+      await typeIntoField("#dob-day",   dobDay);
+      console.log(`Typed Day: "${dobDay}"`);
+      await typeIntoField("#dob-month", dobMonth);
+      console.log(`Typed Month: "${dobMonth}"`);
+      await typeIntoField("#dob-year",  dobYear);
+      console.log(`Typed Year: "${dobYear}"`);
 
-      // Log current values for debugging
+      // Tab out of year field to trigger any blur-based validation
+      await page.keyboard.press("Tab");
+      await page.waitForTimeout(800);
+
+      // Log current values
       const dayVal = await page.locator("#dob-day").inputValue().catch(() => "?");
       const monVal = await page.locator("#dob-month").inputValue().catch(() => "?");
       const yrVal  = await page.locator("#dob-year").inputValue().catch(() => "?");
-      console.log(`Field values after filling — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
+      console.log(`Field values — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
+
+      await page.screenshot({ path: `screenshot-dob-filled-${Date.now()}.png`, fullPage: true });
 
       // Submit DOB form
       for (const sel of submitSelectors) {
@@ -242,11 +234,10 @@ async function main() {
           .first()
           .textContent()
           .catch(() => "");
-        console.warn(`DOB submit rejected — still on DOB page. Error: "${errorText}"`);
-        console.warn(`Check MCA_DOB secret is DD/MM/YYYY (e.g. 25/06/1990)`);
+        console.warn(`DOB submit rejected — still on DOB page. Error: "${errorText?.trim()}"`);
         const bodyText = await page.locator("body").innerText().catch(() => "");
         console.log("DOB page body:", bodyText.slice(0, 800));
-        throw new Error(`DOB rejected by portal — "${errorText.trim() || "There is a problem"}". Verify MCA_DOB secret format is DD/MM/YYYY.`);
+        throw new Error(`DOB rejected — "${errorText?.trim() || "There is a problem"}"`);
       }
     }
 
