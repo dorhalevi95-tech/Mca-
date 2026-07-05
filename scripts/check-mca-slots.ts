@@ -250,63 +250,35 @@ async function main() {
       }
     }
 
-    // Step 5: Navigate to / find the exam booking calendar
-    const postLoginUrl = page.url();
-    console.log("Post-login URL:", postLoginUrl);
-    await page.screenshot({ path: `screenshot-post-login-${Date.now()}.png`, fullPage: true });
-    const postLoginBody = await page.locator("body").innerText().catch(() => "");
-    console.log("Post-login page content (first 1000 chars):", postLoginBody.slice(0, 1000));
+    // Step 5: Navigate to the exam booking/calendar page (we're authenticated now)
+    console.log("Post-login URL:", page.url());
+    // Navigate directly to the booking page — this is the page with the weekly calendar
+    console.log("Navigating to booking page...");
+    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
+    await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+    console.log("Booking page URL:", page.url());
+    await page.screenshot({ path: `screenshot-booking-${Date.now()}.png`, fullPage: true });
+    const bookingBody = await page.locator("body").innerText().catch(() => "");
+    console.log("Booking page content (first 2000 chars):", bookingBody.slice(0, 2000));
 
-    // If we're not already on a calendar/booking page, look for a link to get there
-    if (!postLoginUrl.includes("book") && !postLoginUrl.includes("exam") && !postLoginUrl.includes("slot") && !postLoginUrl.includes("calendar")) {
-      console.log("Not on booking page — looking for booking link...");
-      const bookingSelectors = [
-        'a:has-text("Book")',
-        'a:has-text("Oral exam")',
-        'a:has-text("Schedule")',
-        'a:has-text("Exam")',
-        'a[href*="book"]',
-        'a[href*="oral"]',
-        'a[href*="exam"]',
-        'button:has-text("Book")',
-      ];
-      for (const sel of bookingSelectors) {
-        const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 10000 }).catch(() => false)) {
-          console.log(`Clicking booking link: ${sel}`);
-          await el.click();
-          await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
-          await page.waitForTimeout(3000);
-          console.log("After booking nav — URL:", page.url());
-          break;
-        }
-      }
+    // Log all buttons on the page to find the "Next week" button text
+    const allBtns = await page.locator("button").all();
+    console.log(`Buttons on booking page (${allBtns.length} total):`);
+    for (const btn of allBtns.slice(0, 20)) {
+      const txt = await btn.innerText().catch(() => "");
+      const aria = await btn.getAttribute("aria-label").catch(() => "");
+      console.log(`  BUTTON text="${txt.trim()}" aria-label="${aria}"`);
     }
 
-    // Wait for something calendar-like to appear (week navigation, date cells)
-    console.log("Waiting for calendar/week navigation to appear...");
-    const calendarIndicators = [
-      'button:has-text("Next week")',
-      'button:has-text("Next Week")',
-      '[aria-label*="next" i]',
-      'table',
-      '[class*="calendar"]',
-      '[class*="week"]',
-    ];
-    let calendarFound = false;
-    for (const sel of calendarIndicators) {
-      if (await page.locator(sel).first().isVisible({ timeout: 30000 }).catch(() => false)) {
-        console.log(`Calendar indicator found: ${sel}`);
-        calendarFound = true;
-        break;
-      }
+    // Log all links on the page too
+    const allLinks = await page.locator("a").all();
+    console.log(`Links on booking page (${allLinks.length} total):`);
+    for (const a of allLinks.slice(0, 20)) {
+      const txt = await a.innerText().catch(() => "");
+      const href = await a.getAttribute("href").catch(() => "");
+      console.log(`  LINK text="${txt.trim()}" href="${href}"`);
     }
-    if (!calendarFound) {
-      console.log("No calendar indicator found — proceeding anyway");
-    }
-    await page.screenshot({ path: `screenshot-calendar-${Date.now()}.png`, fullPage: true });
-    const calBody = await page.locator("body").innerText().catch(() => "");
-    console.log("Calendar page content (first 1500 chars):", calBody.slice(0, 1500));
 
     // Step 6: Walk through every week up to TARGET_DATE and collect all slots
     const { slots, weeks } = await extractAllWeeks(page, TARGET_DATE);
