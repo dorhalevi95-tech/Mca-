@@ -44,37 +44,30 @@ async function main() {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
   });
   const page = await context.newPage();
-  // No global timeout — the MCA portal is slow and we never want to give up waiting
-  page.setDefaultTimeout(0);
-  page.setDefaultNavigationTimeout(0);
+  // 30s default for element waits, 45s for navigation — fast-fail on hangs
+  page.setDefaultTimeout(30000);
+  page.setDefaultNavigationTimeout(45000);
 
   try {
     // Step 1: Visit landing page to set cookies, then accept cookie consent
     console.log("Loading landing page...");
-    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
-    await page.waitForTimeout(3000);
+    await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await acceptCookies(page);
-    await page.waitForTimeout(2000);
     console.log("Landing page done. URL:", page.url());
     await page.screenshot({ path: `screenshot-landing-${Date.now()}.png`, fullPage: true });
 
     // Step 2: Navigate directly to SDS entry page (skip clicking "Start now")
     console.log("Navigating directly to SDS entry page...");
-    await page.goto(SDS_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
-    await page.waitForTimeout(3000);
-    // Accept cookies again if they re-appear after navigation
+    await page.goto(SDS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await acceptCookies(page);
-    await page.waitForTimeout(2000);
     console.log("SDS page URL:", page.url());
     await page.screenshot({ path: `screenshot-sds-page-${Date.now()}.png`, fullPage: true });
 
     // If we were redirected away, try the landing page flow as fallback
     if (!page.url().includes("enter-your-seafarer-reference-number")) {
       console.log("Redirected away from SDS page. Trying landing page CTA click...");
-      await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 120000 });
-      await page.waitForTimeout(5000);
+      await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
       await acceptCookies(page);
-      await page.waitForTimeout(3000);
 
       const ctaSelectors = [
         'a:has-text("Start")',
