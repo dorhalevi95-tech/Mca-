@@ -380,7 +380,7 @@ async function extractAllWeeks(
 ): Promise<{ slots: string[]; weeks: WeekResult[] }> {
   const targetMs = new Date(targetDate).getTime();
   const weeks: WeekResult[] = [];
-  const MAX_WEEKS = 30; // safety cap (~7 months)
+  const MAX_WEEKS = 25; // safety cap — Nov 2026 is ~24 weeks from Jul 2026
 
   const nextBtnSelectors = [
     'button:has-text("Next week")',
@@ -428,7 +428,7 @@ async function extractAllWeeks(
     let clicked = false;
     for (const sel of nextBtnSelectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 30000 }).catch(() => false)) {
         await btn.click();
         clicked = true;
         console.log(`Clicked next week via: ${sel}`);
@@ -441,8 +441,9 @@ async function extractAllWeeks(
       break;
     }
 
-    await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
-    await page.waitForTimeout(1500);
+    // Short networkidle wait (15s max) then fixed pause — keeps total scan time under 10 min
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(2000);
   }
 
   const allSlots = [...new Set(weeks.flatMap((w) => w.slots))];
