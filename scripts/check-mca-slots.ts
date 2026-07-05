@@ -342,20 +342,47 @@ async function main() {
       console.log(`  BUTTON: "${txt.trim()}"`);
     }
 
-    // Step 6: Read the "Change time or date" page — the portal shows first available slot directly
-    const { slots, weeks } = await extractSlotsFromPage(page, TARGET_DATE);
+    // Step 6: On /enter_exam_date/ — read current booking, click "Show earliest available date"
+    const bodyBeforeClick = await page.locator("body").innerText().catch(() => "");
+
+    // Extract current booking date from "You are changing your current exam slot of HH:MM (GMT), DD Month YYYY"
+    const currentSlotMatch = bodyBeforeClick.match(
+      /changing your current exam slot of ([^\n]+)/i
+    );
+    const currentSlotLabel = currentSlotMatch ? currentSlotMatch[1].trim() : null;
+    console.log("Current booking slot:", currentSlotLabel);
+
+    // Use current booking date as comparison target (more accurate than TARGET_DATE secret)
+    const currentBookingDate = currentSlotLabel ? parseSlotDate(currentSlotLabel) : new Date(TARGET_DATE);
+    const targetMs = currentBookingDate ? currentBookingDate.getTime() : new Date(TARGET_DATE).getTime();
+    console.log("Comparing against:", currentBookingDate?.toISOString() ?? TARGET_DATE);
+
+    // Click "Show earliest available date" to get the earliest slot
+    console.log('Clicking "Show earliest available date"...');
+    const showEarliestBtn = page.locator('button:has-text("Show earliest available date"), a:has-text("Show earliest available date")').first();
+    if (await showEarliestBtn.isVisible({ timeout: 10000 }).catch(() => false)) {
+      await showEarliestBtn.click();
+      await page.waitForTimeout(3000);
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+    } else {
+      console.log("Show earliest button not found — reading page as-is");
+    }
+    await page.screenshot({ path: `screenshot-earliest-${Date.now()}.png`, fullPage: true });
+
+    const bodyAfterClick = await page.locator("body").innerText().catch(() => "");
+    console.log("Page after earliest click (first 1500 chars):\n", bodyAfterClick.slice(0, 1500));
+
+    const { slots, weeks } = await extractSlotsFromPage(page, TARGET_DATE, bodyAfterClick);
     console.log(`Found ${slots.length} available slot(s):`, slots);
 
     const { error: insertErr } = await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
       slots_found: slots,
       slot_count: slots.length,
-      // Store per-week breakdown as JSON in page_snapshot
       page_snapshot: JSON.stringify(weeks),
     });
     if (insertErr) console.error("Supabase insert error:", insertErr);
 
-    const targetMs = new Date(TARGET_DATE).getTime();
     const earlierSlots = slots.filter((s) => {
       const d = parseSlotDate(s);
       return d !== null && d.getTime() < targetMs;
@@ -407,27 +434,37 @@ type WeekResult = {
   slots: string[];
 };
 
-// The MCA portal shows "First available slot: <date>" directly on the Change time or date page.
-// No need to click through weeks — just read the page once.
+// Read slot information from the /enter_exam_date/ page after clicking "Show earliest available date".
 async function extractSlotsFromPage(
   page: any,
-  targetDate: string
+  targetDate: string,
+  bodyText?: string
 ): Promise<{ slots: string[]; weeks: WeekResult[] }> {
-  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
-  await page.waitForTimeout(2000);
+  if (!bodyText) {
+    bodyText = await page.locator("body").innerText().catch(() => "");
+  }
 
-  const bodyText = await page.locator("body").innerText().catch(() => "");
-  console.log("Calendar page body (first 2000 chars):\n", bodyText.slice(0, 2000));
-
-  // Look for "First available slot" label (exact portal wording)
+  // Look for portal date labels after clicking "Show earliest available date"
   const firstSlotMatch = bodyText.match(
-    /first\s+available\s+slot[:\s]+([^\n]{3,80})/i
+    /(?:first|earliest)\s+available\s+(?:slot|date)[:\s]+([^\n]{3,80})/i
+  ) ?? bodyText.match(
+    /(?:the\s+)?earliest\s+(?:slot|date)\s+(?:is|available)[:\s]+([^\n]{3,80})/i
+  ) ?? bodyText.match(
+    /no\s+slots\s+available[^\n]*/i
   );
   if (firstSlotMatch) {
-    const slotLabel = firstSlotMatch[1].trim();
-    console.log("First available slot from portal label:", slotLabel);
+    const slotLabel = firstSlotMatch[1]?.trim() ?? firstSlotMatch[0].trim();
+    console.log("Earliest slot from portal label:", slotLabel);
     const week: WeekResult = { weekNum: 1, dateRange: slotLabel, slots: [slotLabel] };
     return { slots: [slotLabel], weeks: [week] };
+  }
+
+  // Check if a date was populated into the date input field after clicking "Show earliest"
+  const dateInputVal = await page.locator('input[type="text"], input[type="date"]').first().inputValue().catch(() => "");
+  if (dateInputVal && /\d/.test(dateInputVal)) {
+    console.log("Date input value after Show earliest:", dateInputVal);
+    const week: WeekResult = { weekNum: 1, dateRange: dateInputVal, slots: [dateInputVal] };
+    return { slots: [dateInputVal], weeks: [week] };
   }
 
   // Fallback: extract any date lines that look like bookable slots
