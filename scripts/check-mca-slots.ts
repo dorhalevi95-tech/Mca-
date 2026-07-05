@@ -501,6 +501,8 @@ function extractAvailableSlots(bodyText: string): string[] {
   const slotLines: string[] = [];
   for (const line of lines) {
     const lower = line.toLowerCase();
+    // Exclude the "You are changing your current exam slot of..." info line
+    if (/changing your current exam slot/i.test(line)) continue;
     const hasDate = /\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(line);
     const hasTime = /\b\d{1,2}:\d{2}\b/.test(line);
     const hasAvailKeyword = /\b(available|select|choose|book|am|pm|slot)\b/i.test(lower);

@@ -2,7 +2,7 @@ import { supabase, type Check, type Notification } from "@/lib/supabase";
 import { Calendar, Bell, AlertTriangle, TrendingUp, Clock, Activity } from "lucide-react";
 import { CheckRow } from "./check-row";
 
-const TARGET_DATE = process.env.TARGET_DATE ?? "2025-11-25";
+const TARGET_DATE = process.env.TARGET_DATE ?? "2026-11-03";
 
 async function getChecks(): Promise<Check[]> {
   const { data } = await supabase
