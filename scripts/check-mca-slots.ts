@@ -169,75 +169,79 @@ async function main() {
     if (page.url().includes("date_of_birth") || page.url().includes("dob")) {
       console.log("On DOB page — filling date of birth...");
 
-      // Wait for the page JS to fully initialise before touching inputs
-      await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
-      await page.waitForTimeout(2000);
-
       const dobParts = MCA_DOB.split(/[\/\-\.\s]+/);
       const dobDay   = dobParts[0] ?? "";
       const dobMonth = dobParts[1] ?? "";
       const dobYear  = dobParts[2] ?? "";
       console.log(`Parsed DOB — Day: "${dobDay}" Month: "${dobMonth}" Year: "${dobYear}"`);
 
-      // Type each field character-by-character like a real user
-      async function typeIntoField(selector: string, value: string) {
-        const el = page.locator(selector).first();
-        await el.click();
-        await page.waitForTimeout(300);
-        await el.selectText().catch(() => {});
-        await page.keyboard.press("Backspace");
-        await page.waitForTimeout(100);
-        for (const char of value) {
-          await page.keyboard.press(char);
-          await page.waitForTimeout(80);
-        }
+      // Fill via native React/framework-compatible events
+      async function fillNative(selector: string, value: string) {
+        await page.locator(selector).first().click();
+        await page.waitForTimeout(150);
+        await page.evaluate(({ sel, val }: { sel: string; val: string }) => {
+          const el = document.querySelector(sel) as HTMLInputElement | null;
+          if (!el) return;
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+          if (setter) setter.call(el, val); else el.value = val;
+          el.dispatchEvent(new Event("focus",  { bubbles: true }));
+          el.dispatchEvent(new Event("input",  { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+        }, { sel: selector, val: value });
         await page.waitForTimeout(300);
       }
 
-      await typeIntoField("#dob-day",   dobDay);
-      console.log(`Typed Day: "${dobDay}"`);
-      await typeIntoField("#dob-month", dobMonth);
-      console.log(`Typed Month: "${dobMonth}"`);
-      await typeIntoField("#dob-year",  dobYear);
-      console.log(`Typed Year: "${dobYear}"`);
+      // Retry DOB submit up to 3 times — portal backend sometimes transiently rejects
+      let dobAccepted = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        console.log(`DOB attempt ${attempt}/3`);
 
-      // Tab out of year field to trigger any blur-based validation
-      await page.keyboard.press("Tab");
-      await page.waitForTimeout(800);
+        // Wait for page to settle before filling
+        await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
+        await page.waitForTimeout(1500);
 
-      // Log current values
-      const dayVal = await page.locator("#dob-day").inputValue().catch(() => "?");
-      const monVal = await page.locator("#dob-month").inputValue().catch(() => "?");
-      const yrVal  = await page.locator("#dob-year").inputValue().catch(() => "?");
-      console.log(`Field values — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
+        await fillNative("#dob-day",   dobDay);
+        await fillNative("#dob-month", dobMonth);
+        await fillNative("#dob-year",  dobYear);
+        await page.keyboard.press("Tab"); // blur last field
+        await page.waitForTimeout(500);
 
-      await page.screenshot({ path: `screenshot-dob-filled-${Date.now()}.png`, fullPage: true });
+        const dayVal = await page.locator("#dob-day").inputValue().catch(() => "?");
+        const monVal = await page.locator("#dob-month").inputValue().catch(() => "?");
+        const yrVal  = await page.locator("#dob-year").inputValue().catch(() => "?");
+        console.log(`Field values — Day: "${dayVal}" Month: "${monVal}" Year: "${yrVal}"`);
+        await page.screenshot({ path: `screenshot-dob-attempt${attempt}-${Date.now()}.png`, fullPage: true });
 
-      // Submit DOB form
-      for (const sel of submitSelectors) {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
-          await btn.click();
-          console.log(`Clicked DOB submit via: ${sel}`);
+        for (const sel of submitSelectors) {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 30000 }).catch(() => false)) {
+            await btn.click();
+            console.log(`Clicked DOB submit via: ${sel}`);
+            break;
+          }
+        }
+
+        await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+        await page.waitForTimeout(3000);
+        const afterDobUrl = page.url();
+        console.log(`Attempt ${attempt} — After DOB submit URL: ${afterDobUrl}`);
+
+        if (!afterDobUrl.includes("date_of_birth") && !afterDobUrl.includes("dob")) {
+          dobAccepted = true;
           break;
         }
+
+        if (attempt < 3) {
+          console.log(`DOB rejected on attempt ${attempt} — waiting 10s before retry...`);
+          await page.waitForTimeout(10000);
+        }
       }
 
-      await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
-      await page.waitForTimeout(3000);
-      const afterDobUrl = page.url();
-      console.log("After DOB submit — URL:", afterDobUrl);
-
-      if (afterDobUrl.includes("date_of_birth") || afterDobUrl.includes("dob")) {
-        const errorText = await page
-          .locator('.validation-summary-errors, .field-validation-error, [class*="error"], [class*="alert"]')
-          .first()
-          .textContent()
-          .catch(() => "");
-        console.warn(`DOB submit rejected — still on DOB page. Error: "${errorText?.trim()}"`);
+      if (!dobAccepted) {
         const bodyText = await page.locator("body").innerText().catch(() => "");
-        console.log("DOB page body:", bodyText.slice(0, 800));
-        throw new Error(`DOB rejected — "${errorText?.trim() || "There is a problem"}"`);
+        console.log("DOB page body after all retries:", bodyText.slice(0, 800));
+        throw new Error(`DOB rejected after 3 attempts — check MCA_DOB secret (format DD/MM/YYYY)`);
       }
     }
 
