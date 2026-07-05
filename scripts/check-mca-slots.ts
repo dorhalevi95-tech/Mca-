@@ -25,10 +25,10 @@ async function acceptCookies(page: any) {
   ];
   for (const sel of cookieSelectors) {
     const btn = page.locator(sel).first();
-    if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
+    if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
       console.log(`Accepting cookies via: ${sel}`);
       await btn.click();
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(1000);
       return true;
     }
   }
@@ -85,14 +85,13 @@ async function main() {
       ];
       for (const sel of ctaSelectors) {
         const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 60000 }).catch(() => false)) {
+        if (await el.isVisible({ timeout: 8000 }).catch(() => false)) {
           console.log(`Clicking CTA: ${sel}`);
           await el.click();
           break;
         }
       }
-      // Wait generously for navigation
-      await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 120000 }).catch(() => {});
+      await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 15000 }).catch(() => {});
       await page.waitForTimeout(3000);
       console.log("After CTA fallback — URL:", page.url());
       await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
@@ -123,7 +122,7 @@ async function main() {
     let sdsFilled = false;
     for (const sel of sdsSelectors) {
       const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 60000 }).catch(() => false)) {
+      if (await el.isVisible({ timeout: 8000 }).catch(() => false)) {
         await el.fill(MCA_SDS_NUMBER);
         console.log(`Filled SDS using: ${sel}`);
         sdsFilled = true;
@@ -137,7 +136,7 @@ async function main() {
         .locator("input:not([type='hidden']):not([type='checkbox']):not([type='radio']):not([type='submit'])")
         .first();
       console.log("Waiting for any visible input (up to 30s)...");
-      await firstInput.waitFor({ timeout: 120000 });
+      await firstInput.waitFor({ timeout: 15000 });
       await firstInput.fill(MCA_SDS_NUMBER);
       console.log("Filled SDS using first available input");
     }
@@ -153,7 +152,7 @@ async function main() {
     ];
     for (const sel of submitSelectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 60000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 8000 }).catch(() => false)) {
         await btn.click();
         console.log(`Clicked submit via: ${sel}`);
         break;
@@ -161,7 +160,6 @@ async function main() {
     }
 
     await page.waitForTimeout(4000);
-    await page.waitForTimeout(3000);
     console.log("After SDS submit — URL:", page.url());
     await page.screenshot({ path: `screenshot-after-sds-${Date.now()}.png`, fullPage: true });
 
