@@ -8,7 +8,7 @@ const MCA_SDS_NUMBER = process.env.MCA_SDS_NUMBER!;
 const MCA_DOB = process.env.MCA_DOB!;
 const RESEND_API_KEY = process.env.RESEND_API_KEY!;
 const NOTIFY_EMAIL = process.env.NOTIFY_EMAIL!;
-const TARGET_DATE = process.env.TARGET_DATE ?? "2026-11-25";
+const TARGET_DATE = process.env.TARGET_DATE ?? "2026-11-03";
 
 const SDS_URL = "https://mymca-prod.powerappsportals.com/enter-your-seafarer-reference-number/";
 const LANDING_URL = "https://mymca-prod.powerappsportals.com/book_and_manage_an_oral_exam/";
@@ -435,13 +435,20 @@ async function extractSlotsFromPage(
     bodyText = await page.locator("body").innerText().catch(() => "");
   }
 
+  // Try to parse the week view format the portal shows:
+  //   Monday\n7 December\nNo slots\nTuesday\n8 December\n1 slots\n...\nAvailable slots\n09:00\n11:30
+  const weekViewSlots = extractWeekViewSlots(bodyText);
+  if (weekViewSlots.slots.length > 0 || weekViewSlots.hadWeekView) {
+    console.log("Parsed week view slots:", weekViewSlots.slots);
+    const week: WeekResult = { weekNum: 1, dateRange: weekViewSlots.dateRange, slots: weekViewSlots.slots };
+    return { slots: weekViewSlots.slots, weeks: [week] };
+  }
+
   // Look for portal date labels after clicking "Show earliest available date"
   const firstSlotMatch = bodyText.match(
     /(?:first|earliest)\s+available\s+(?:slot|date)[:\s]+([^\n]{3,80})/i
   ) ?? bodyText.match(
     /(?:the\s+)?earliest\s+(?:slot|date)\s+(?:is|available)[:\s]+([^\n]{3,80})/i
-  ) ?? bodyText.match(
-    /no\s+slots\s+available[^\n]*/i
   );
   if (firstSlotMatch) {
     const slotLabel = firstSlotMatch[1]?.trim() ?? firstSlotMatch[0].trim();
@@ -462,7 +469,6 @@ async function extractSlotsFromPage(
   const slots = extractAvailableSlots(bodyText);
   console.log("Fallback extracted slots:", slots);
 
-  // Also grab all visible dates for the dateRange label
   const allDates = extractDatesFromText(bodyText);
   const sorted = allDates
     .map((d) => new Date(d))
@@ -479,6 +485,102 @@ async function extractSlotsFromPage(
 
   const week: WeekResult = { weekNum: 1, dateRange, slots };
   return { slots, weeks: [week] };
+}
+
+// Parse the Mon-Fri week-view table the portal renders:
+//   Monday\n7 December\nNo slots\nTuesday\n8 December\n1 slots\n...\nAvailable slots\n09:00\n11:30
+// We infer the year from the TARGET_DATE env var (or current year + 1 if missing).
+function extractWeekViewSlots(bodyText: string): { slots: string[]; dateRange: string; hadWeekView: boolean } {
+  const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  const lines = bodyText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  // Detect whether this looks like a week view at all
+  const hasDayLine = lines.some((l) => DAY_NAMES.includes(l));
+  const hasSlotCountLine = lines.some((l) => /^\d+\s+slots?$/i.test(l) || /^no\s+slots?$/i.test(l));
+  if (!hasDayLine || !hasSlotCountLine) {
+    return { slots: [], dateRange: "page scanned", hadWeekView: false };
+  }
+
+  // Guess the year: use TARGET_DATE env or current year
+  const targetYear = process.env.TARGET_DATE
+    ? parseInt(process.env.TARGET_DATE.slice(0, 4), 10)
+    : new Date().getFullYear();
+
+  // Collect (date, slotCount) pairs
+  type DayEntry = { label: string; date: Date; count: number };
+  const entries: DayEntry[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!DAY_NAMES.includes(lines[i])) continue;
+
+    // Next non-empty line should be "D Month" (with or without year)
+    const dateLine = lines[i + 1] ?? "";
+    const dateMatch = dateLine.match(/^(\d{1,2})\s+([A-Za-z]+)(?:\s+(\d{4}))?$/);
+    if (!dateMatch) continue;
+
+    const day = parseInt(dateMatch[1], 10);
+    const monthStr = dateMatch[2];
+    const monthIdx = MONTH_NAMES.findIndex((m) => m.toLowerCase().startsWith(monthStr.toLowerCase().slice(0, 3)));
+    if (monthIdx === -1) continue;
+    const year = dateMatch[3] ? parseInt(dateMatch[3], 10) : targetYear;
+    const date = new Date(year, monthIdx, day);
+    if (isNaN(date.getTime())) continue;
+
+    // Next line after date should be slot count
+    const countLine = lines[i + 2] ?? "";
+    const countMatch = countLine.match(/^(\d+)\s+slots?$/i);
+    const noSlots = /^no\s+slots?$/i.test(countLine);
+    const count = countMatch ? parseInt(countMatch[1], 10) : noSlots ? 0 : -1;
+    if (count === -1) continue; // unexpected format
+
+    const label = `${day} ${monthStr} ${year}`;
+    entries.push({ label, date, count });
+  }
+
+  if (entries.length === 0) {
+    return { slots: [], dateRange: "page scanned", hadWeekView: false };
+  }
+
+  // Build date range string (week span)
+  const sorted = [...entries].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const dateRange = `${sorted[0].label} – ${sorted[sorted.length - 1].label}`;
+
+  // Extract available times from "Available slots" section
+  const availIdx = lines.findIndex((l) => /^available\s+slots?$/i.test(l));
+  const availTimes: string[] = [];
+  if (availIdx !== -1) {
+    for (let j = availIdx + 1; j < lines.length; j++) {
+      if (/^\d{1,2}:\d{2}$/.test(lines[j])) {
+        availTimes.push(lines[j]);
+      } else if (lines[j] !== "") {
+        break; // end of time list
+      }
+    }
+  }
+
+  // Build slot strings for days with available slots.
+  // When we don't know which times belong to which day, we use all listed times
+  // for each day that has slots (conservative: maximises chance of detection).
+  const slots: string[] = [];
+  for (const entry of entries) {
+    if (entry.count <= 0) continue;
+    const day = entry.date.getDate();
+    const month = MONTH_NAMES[entry.date.getMonth()];
+    const year = entry.date.getFullYear();
+    if (availTimes.length > 0) {
+      for (const t of availTimes) {
+        slots.push(`${day} ${month} ${year} ${t}`);
+      }
+    } else {
+      // No times listed — use midnight as a sentinel (date comparison still works)
+      slots.push(`${day} ${month} ${year} 00:00`);
+    }
+  }
+
+  console.log(`Week view parsed: ${entries.length} days, ${entries.filter(e=>e.count>0).length} with slots, ${availTimes.length} times listed`);
+  return { slots: [...new Set(slots)], dateRange, hadWeekView: true };
 }
 
 function extractDatesFromText(text: string): string[] {
@@ -508,6 +610,15 @@ function extractAvailableSlots(bodyText: string): string[] {
 }
 
 function parseSlotDate(slotLabel: string): Date | null {
+  // Handle "8 December 2026 09:00" — our week-view slot format
+  const weekViewMatch = slotLabel.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})(?:\s+(\d{1,2}:\d{2}))?$/);
+  if (weekViewMatch) {
+    const str = weekViewMatch[4]
+      ? `${weekViewMatch[2]} ${weekViewMatch[1]}, ${weekViewMatch[3]} ${weekViewMatch[4]}`
+      : `${weekViewMatch[2]} ${weekViewMatch[1]}, ${weekViewMatch[3]}`;
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d;
+  }
   // Try direct parse first
   const d = new Date(slotLabel);
   if (!isNaN(d.getTime())) return d;
