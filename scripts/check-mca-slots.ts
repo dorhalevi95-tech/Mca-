@@ -307,9 +307,9 @@ async function main() {
       console.log(`  BUTTON: "${txt.trim()}"`);
     }
 
-    // Step 6: Walk through every week up to TARGET_DATE and collect all slots
-    const { slots, weeks } = await extractAllWeeks(page, TARGET_DATE);
-    console.log(`Found ${slots.length} available slot(s) across ${weeks.length} weeks:`, slots);
+    // Step 6: Read the "Change time or date" page — the portal shows first available slot directly
+    const { slots, weeks } = await extractSlotsFromPage(page, TARGET_DATE);
+    console.log(`Found ${slots.length} available slot(s):`, slots);
 
     const { error: insertErr } = await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
@@ -367,88 +367,55 @@ async function main() {
 }
 
 type WeekResult = {
-  weekNum: number;       // 1-based week index
-  dateRange: string;     // e.g. "3 Jul – 9 Jul 2025"
-  slots: string[];       // available slot dates found this week
+  weekNum: number;
+  dateRange: string;
+  slots: string[];
 };
 
-// Walk through every week on the calendar, clicking "next week" until we reach
-// or pass targetDate. Returns all unique slots AND a per-week breakdown.
-async function extractAllWeeks(
+// The MCA portal shows "First available slot: <date>" directly on the Change time or date page.
+// No need to click through weeks — just read the page once.
+async function extractSlotsFromPage(
   page: any,
   targetDate: string
 ): Promise<{ slots: string[]; weeks: WeekResult[] }> {
-  const targetMs = new Date(targetDate).getTime();
-  const weeks: WeekResult[] = [];
-  const MAX_WEEKS = 25; // safety cap — Nov 2026 is ~24 weeks from Jul 2026
+  await page.waitForLoadState("networkidle", { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(2000);
 
-  const nextBtnSelectors = [
-    'button:has-text("Next week")',
-    'button:has-text("Next Week")',
-    'button[aria-label*="next" i]',
-    'a:has-text("Next week")',
-    'a:has-text("Next")',
-    '[class*="next"]:not([disabled])',
-    'button:has-text("›")',
-    'button:has-text(">")',
-  ];
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  console.log("Calendar page body (first 2000 chars):\n", bodyText.slice(0, 2000));
 
-  for (let w = 0; w < MAX_WEEKS; w++) {
-    const bodyText = await page.locator("body").innerText().catch(() => "");
-    const visibleDates = extractDatesFromText(bodyText);
-    const weekSlots = extractAvailableSlots(bodyText);
-
-    // Build a human-readable date range label from the visible dates
-    const sorted = visibleDates
-      .map((d) => new Date(d))
-      .filter((d) => !isNaN(d.getTime()))
-      .sort((a, b) => a.getTime() - b.getTime());
-
-    const fmt = (d: Date) =>
-      d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-    const dateRange =
-      sorted.length >= 2
-        ? `${fmt(sorted[0])} – ${fmt(sorted[sorted.length - 1])}`
-        : sorted.length === 1
-        ? fmt(sorted[0])
-        : "unknown week";
-
-    const result: WeekResult = { weekNum: w + 1, dateRange, slots: weekSlots };
-    weeks.push(result);
-    console.log(`Week ${w + 1} [${dateRange}]: ${weekSlots.length} slot(s) — [${weekSlots.join(", ")}]`);
-
-    // Stop once the latest visible date has reached or passed target
-    const latestVisible = sorted.length ? sorted[sorted.length - 1].getTime() : 0;
-    if (latestVisible >= targetMs) {
-      console.log(`Reached/passed target date ${targetDate} — done.`);
-      break;
-    }
-
-    // Click "next week"
-    let clicked = false;
-    for (const sel of nextBtnSelectors) {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 30000 }).catch(() => false)) {
-        await btn.click();
-        clicked = true;
-        console.log(`Clicked next week via: ${sel}`);
-        break;
-      }
-    }
-
-    if (!clicked) {
-      console.log("No 'next week' button found — stopping.");
-      break;
-    }
-
-    // Short networkidle wait (15s max) then fixed pause — keeps total scan time under 10 min
-    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(2000);
+  // Look for "First available slot" label (exact portal wording)
+  const firstSlotMatch = bodyText.match(
+    /first\s+available\s+slot[:\s]+([^\n]{3,80})/i
+  );
+  if (firstSlotMatch) {
+    const slotLabel = firstSlotMatch[1].trim();
+    console.log("First available slot from portal label:", slotLabel);
+    const week: WeekResult = { weekNum: 1, dateRange: slotLabel, slots: [slotLabel] };
+    return { slots: [slotLabel], weeks: [week] };
   }
 
-  const allSlots = [...new Set(weeks.flatMap((w) => w.slots))];
-  console.log(`Total unique slots across all weeks: ${allSlots.length}`);
-  return { slots: allSlots, weeks };
+  // Fallback: extract any date lines that look like bookable slots
+  const slots = extractAvailableSlots(bodyText);
+  console.log("Fallback extracted slots:", slots);
+
+  // Also grab all visible dates for the dateRange label
+  const allDates = extractDatesFromText(bodyText);
+  const sorted = allDates
+    .map((d) => new Date(d))
+    .filter((d) => !isNaN(d.getTime()))
+    .sort((a, b) => a.getTime() - b.getTime());
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const dateRange =
+    sorted.length >= 2
+      ? `${fmt(sorted[0])} – ${fmt(sorted[sorted.length - 1])}`
+      : sorted.length === 1
+      ? fmt(sorted[0])
+      : "page scanned";
+
+  const week: WeekResult = { weekNum: 1, dateRange, slots };
+  return { slots, weeks: [week] };
 }
 
 function extractDatesFromText(text: string): string[] {
@@ -458,8 +425,6 @@ function extractDatesFromText(text: string): string[] {
 }
 
 function extractAvailableSlots(bodyText: string): string[] {
-  // Look for dates that appear near availability keywords
-  // A "slot" is a date near words like "available", "select", "choose", "book", or a time
   const lines = bodyText.split("\n");
   const slotLines: string[] = [];
   for (const line of lines) {
@@ -471,17 +436,23 @@ function extractAvailableSlots(bodyText: string): string[] {
       slotLines.push(line.trim());
     }
   }
-  // Fall back: if nothing keyword-matched, return dates that also have a time component
   if (slotLines.length === 0) {
-    return extractDatesFromText(bodyText).filter(d => /\d{1,2}:\d{2}/.test(d));
+    return extractDatesFromText(bodyText).filter((d) => /\d{1,2}:\d{2}/.test(d));
   }
   return [...new Set(slotLines)];
 }
 
 function parseSlotDate(slotLabel: string): Date | null {
-  const cleaned = slotLabel.replace(/[^\w\s/-]/g, "").trim();
-  const d = new Date(cleaned);
-  return isNaN(d.getTime()) ? null : d;
+  // Try direct parse first
+  const d = new Date(slotLabel);
+  if (!isNaN(d.getTime())) return d;
+  // Extract a date-like substring (e.g. "25 November 2026" from a longer label)
+  const m = slotLabel.match(/(\d{1,2}\s+\w+\s+\d{4}|\d{4}-\d{2}-\d{2})/);
+  if (m) {
+    const d2 = new Date(m[1]);
+    if (!isNaN(d2.getTime())) return d2;
+  }
+  return null;
 }
 
 async function sendNotification(slots: string[]) {
