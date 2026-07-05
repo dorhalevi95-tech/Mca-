@@ -39,10 +39,11 @@ jobs:
           TARGET_DATE: ${{ secrets.TARGET_DATE }}
         run: npx tsx scripts/check-mca-slots.ts
 
-      - name: Upload screenshot on failure
-        if: failure()
+      - name: Upload screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: failure-screenshot
+          name: screenshots-${{ github.run_id }}
           path: screenshot-*.png
           retention-days: 3
+          if-no-files-found: ignore

@@ -250,10 +250,65 @@ async function main() {
       }
     }
 
-    await page.screenshot({ path: `screenshot-final-${Date.now()}.png`, fullPage: true });
-    console.log("Final URL:", page.url());
+    // Step 5: Navigate to / find the exam booking calendar
+    const postLoginUrl = page.url();
+    console.log("Post-login URL:", postLoginUrl);
+    await page.screenshot({ path: `screenshot-post-login-${Date.now()}.png`, fullPage: true });
+    const postLoginBody = await page.locator("body").innerText().catch(() => "");
+    console.log("Post-login page content (first 1000 chars):", postLoginBody.slice(0, 1000));
 
-    // Step 5: Walk through every week up to TARGET_DATE and collect all slots
+    // If we're not already on a calendar/booking page, look for a link to get there
+    if (!postLoginUrl.includes("book") && !postLoginUrl.includes("exam") && !postLoginUrl.includes("slot") && !postLoginUrl.includes("calendar")) {
+      console.log("Not on booking page — looking for booking link...");
+      const bookingSelectors = [
+        'a:has-text("Book")',
+        'a:has-text("Oral exam")',
+        'a:has-text("Schedule")',
+        'a:has-text("Exam")',
+        'a[href*="book"]',
+        'a[href*="oral"]',
+        'a[href*="exam"]',
+        'button:has-text("Book")',
+      ];
+      for (const sel of bookingSelectors) {
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 10000 }).catch(() => false)) {
+          console.log(`Clicking booking link: ${sel}`);
+          await el.click();
+          await page.waitForLoadState("networkidle", { timeout: 120000 }).catch(() => {});
+          await page.waitForTimeout(3000);
+          console.log("After booking nav — URL:", page.url());
+          break;
+        }
+      }
+    }
+
+    // Wait for something calendar-like to appear (week navigation, date cells)
+    console.log("Waiting for calendar/week navigation to appear...");
+    const calendarIndicators = [
+      'button:has-text("Next week")',
+      'button:has-text("Next Week")',
+      '[aria-label*="next" i]',
+      'table',
+      '[class*="calendar"]',
+      '[class*="week"]',
+    ];
+    let calendarFound = false;
+    for (const sel of calendarIndicators) {
+      if (await page.locator(sel).first().isVisible({ timeout: 30000 }).catch(() => false)) {
+        console.log(`Calendar indicator found: ${sel}`);
+        calendarFound = true;
+        break;
+      }
+    }
+    if (!calendarFound) {
+      console.log("No calendar indicator found — proceeding anyway");
+    }
+    await page.screenshot({ path: `screenshot-calendar-${Date.now()}.png`, fullPage: true });
+    const calBody = await page.locator("body").innerText().catch(() => "");
+    console.log("Calendar page content (first 1500 chars):", calBody.slice(0, 1500));
+
+    // Step 6: Walk through every week up to TARGET_DATE and collect all slots
     const { slots, weeks } = await extractAllWeeks(page, TARGET_DATE);
     console.log(`Found ${slots.length} available slot(s) across ${weeks.length} weeks:`, slots);
 
@@ -403,7 +458,24 @@ function extractDatesFromText(text: string): string[] {
 }
 
 function extractAvailableSlots(bodyText: string): string[] {
-  return extractDatesFromText(bodyText);
+  // Look for dates that appear near availability keywords
+  // A "slot" is a date near words like "available", "select", "choose", "book", or a time
+  const lines = bodyText.split("\n");
+  const slotLines: string[] = [];
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    const hasDate = /\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i.test(line);
+    const hasTime = /\b\d{1,2}:\d{2}\b/.test(line);
+    const hasAvailKeyword = /\b(available|select|choose|book|am|pm|slot)\b/i.test(lower);
+    if (hasDate && (hasTime || hasAvailKeyword)) {
+      slotLines.push(line.trim());
+    }
+  }
+  // Fall back: if nothing keyword-matched, return dates that also have a time component
+  if (slotLines.length === 0) {
+    return extractDatesFromText(bodyText).filter(d => /\d{1,2}:\d{2}/.test(d));
+  }
+  return [...new Set(slotLines)];
 }
 
 function parseSlotDate(slotLabel: string): Date | null {
