@@ -374,9 +374,11 @@ async function main() {
     });
     if (insertErr) console.error("Supabase insert error:", insertErr);
 
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
     const earlierSlots = slots.filter((s) => {
       const d = parseSlotDate(s);
-      return d !== null && d.getTime() < targetMs;
+      return d !== null && d.getTime() >= todayStart.getTime() && d.getTime() < targetMs;
     });
 
     if (earlierSlots.length > 0) {
