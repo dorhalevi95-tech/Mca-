@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
+import * as fs from "fs";
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -275,7 +276,11 @@ async function main() {
     // Flow: Dashboard → click "Exams" → click exam link → click "Change time or date"
     // IMPORTANT: never click "Cancel exam booking"
     console.log("Post-login URL:", page.url());
-    await page.screenshot({ path: `screenshot-dashboard-${Date.now()}.png`, fullPage: true });
+    const dashScreenshotPath = `screenshot-dashboard-${Date.now()}.png`;
+    await page.screenshot({ path: dashScreenshotPath, fullPage: true });
+    await sendScreenshotEmail(dashScreenshotPath, page.url()).catch((e) =>
+      console.warn("Screenshot email failed (non-fatal):", e.message)
+    );
 
     async function clickVisible(selectors: string[], label: string): Promise<boolean> {
       for (const sel of selectors) {
@@ -607,6 +612,30 @@ function parseSlotDate(slotLabel: string): Date | null {
     if (!isNaN(d2.getTime())) return d2;
   }
   return null;
+}
+
+async function sendScreenshotEmail(screenshotPath: string, currentUrl: string) {
+  const imgBuffer = fs.readFileSync(screenshotPath);
+  const base64 = imgBuffer.toString("base64");
+  const now = new Date().toUTCString();
+  await resend.emails.send({
+    from: "MCA Monitor <onboarding@resend.dev>",
+    to: NOTIFY_EMAIL,
+    subject: `MCA Monitor — login check ${now}`,
+    html: `
+      <h2>MCA Portal Login Screenshot</h2>
+      <p>Taken at: <strong>${now}</strong></p>
+      <p>URL after login: <code>${currentUrl}</code></p>
+      <p>See attachment for the full-page screenshot.</p>
+    `,
+    attachments: [
+      {
+        filename: "dashboard.png",
+        content: base64,
+      },
+    ],
+  });
+  console.log("Screenshot email sent to", NOTIFY_EMAIL);
 }
 
 async function sendNotification(slots: string[]) {
