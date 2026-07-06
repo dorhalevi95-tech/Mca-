@@ -7,7 +7,12 @@ on:
     - cron: "0 11 * * *"
     - cron: "0 15 * * *"
     - cron: "0 19 * * *"
-  workflow_dispatch: # allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      send_screenshots:
+        description: "Email all stage screenshots after the run?"
+        type: boolean
+        default: false
 
 jobs:
   check:
@@ -37,6 +42,7 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           TARGET_DATE: ${{ secrets.TARGET_DATE }}
+          SEND_SCREENSHOTS: ${{ inputs.send_screenshots || 'false' }}
         run: npx tsx scripts/check-mca-slots.ts
 
       - name: Upload screenshots

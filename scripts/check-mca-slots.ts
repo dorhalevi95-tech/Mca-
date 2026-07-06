@@ -39,6 +39,17 @@ async function acceptCookies(page: any) {
 async function main() {
   console.log(`[${new Date().toISOString()}] Starting MCA slot check...`);
 
+  // Collect (label, path) for every screenshot taken — emailed at end of run
+  const screenshots: { label: string; path: string }[] = [];
+
+  async function snap(label: string): Promise<string> {
+    const path = `screenshot-${label.replace(/\s+/g, "-").toLowerCase()}-${Date.now()}.png`;
+    await page.screenshot({ path, fullPage: true }).catch(() => {});
+    screenshots.push({ label, path });
+    console.log(`Screenshot: ${label} → ${path}`);
+    return path;
+  }
+
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent:
@@ -55,14 +66,14 @@ async function main() {
     await page.goto(LANDING_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await acceptCookies(page);
     console.log("Landing page done. URL:", page.url());
-    await page.screenshot({ path: `screenshot-landing-${Date.now()}.png`, fullPage: true });
+    await snap("1 Landing page");
 
     // Step 2: Navigate directly to SDS entry page (skip clicking "Start now")
     console.log("Navigating directly to SDS entry page...");
     await page.goto(SDS_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await acceptCookies(page);
     console.log("SDS page URL:", page.url());
-    await page.screenshot({ path: `screenshot-sds-page-${Date.now()}.png`, fullPage: true });
+    await snap("2 SDS page");
 
     // If we were redirected away, try the landing page flow as fallback
     if (!page.url().includes("enter-your-seafarer-reference-number")) {
@@ -88,7 +99,7 @@ async function main() {
       await page.waitForURL("**/enter-your-seafarer-reference-number/**", { timeout: 15000 }).catch(() => {});
       await page.waitForTimeout(3000);
       console.log("After CTA fallback — URL:", page.url());
-      await page.screenshot({ path: `screenshot-after-cta-${Date.now()}.png`, fullPage: true });
+      await snap("2b CTA fallback");
     }
 
     // Step 3: Fill SDS number
@@ -135,7 +146,7 @@ async function main() {
       console.log("Filled SDS using first available input");
     }
 
-    await page.screenshot({ path: `screenshot-sds-filled-${Date.now()}.png`, fullPage: true });
+    await snap("3 SDS filled");
 
     // Submit SDS form
     const submitSelectors = [
@@ -155,7 +166,7 @@ async function main() {
 
     await page.waitForTimeout(4000);
     console.log("After SDS submit — URL:", page.url());
-    await page.screenshot({ path: `screenshot-after-sds-${Date.now()}.png`, fullPage: true });
+    await snap("3b After SDS submit");
 
     // Step 4: DOB page — portal has 3 separate Day/Month/Year fields
     if (page.url().includes("date_of_birth") || page.url().includes("dob")) {
@@ -232,7 +243,7 @@ async function main() {
         await page.keyboard.press("Tab");
         await page.waitForTimeout(500);
 
-        await page.screenshot({ path: `screenshot-dob-attempt${attempt}-${Date.now()}.png`, fullPage: true });
+        await snap(`4 DOB attempt ${attempt}`);
 
         for (const sel of submitSelectors) {
           const btn = page.locator(sel).first();
@@ -276,11 +287,7 @@ async function main() {
     // Flow: Dashboard → click "Exams" → click exam link → click "Change time or date"
     // IMPORTANT: never click "Cancel exam booking"
     console.log("Post-login URL:", page.url());
-    const dashScreenshotPath = `screenshot-dashboard-${Date.now()}.png`;
-    await page.screenshot({ path: dashScreenshotPath, fullPage: true });
-    await sendScreenshotEmail(dashScreenshotPath, page.url()).catch((e) =>
-      console.warn("Screenshot email failed (non-fatal):", e.message)
-    );
+    await snap("5 Dashboard after login");
 
     async function clickVisible(selectors: string[], label: string): Promise<boolean> {
       for (const sel of selectors) {
@@ -305,7 +312,7 @@ async function main() {
       'a[href*="exam"]',
       'text=Book or manage exams',
     ], "Exams card");
-    await page.screenshot({ path: `screenshot-exams-${Date.now()}.png`, fullPage: true });
+    await snap("5a Exams list");
 
     // Step 5b: Click the exam type link (e.g. "Small Vessel - Chief Engineer...")
     await clickVisible([
@@ -315,7 +322,7 @@ async function main() {
       '.govuk-table__row a',
       'table a',
     ], "exam type link");
-    await page.screenshot({ path: `screenshot-manage-${Date.now()}.png`, fullPage: true });
+    await snap("5b Manage exam");
 
     // Step 5c: Click "Change time or date" — NEVER "Cancel exam booking"
     const changedToCalendar = await clickVisible([
@@ -327,7 +334,7 @@ async function main() {
       const bodySnap = await page.locator("body").innerText().catch(() => "");
       console.log("Page content after exam link click:", bodySnap.slice(0, 1500));
     }
-    await page.screenshot({ path: `screenshot-calendar-${Date.now()}.png`, fullPage: true });
+    await snap("5c Calendar change date");
     console.log("Calendar page URL:", page.url());
 
     // Log all buttons to help debug week navigation
@@ -363,7 +370,7 @@ async function main() {
     } else {
       console.log("Show earliest button not found — reading page as-is");
     }
-    await page.screenshot({ path: `screenshot-earliest-${Date.now()}.png`, fullPage: true });
+    await snap("6 Earliest available week");
 
     const bodyAfterClick = await page.locator("body").innerText().catch(() => "");
     console.log("Page after earliest click (first 1500 chars):\n", bodyAfterClick.slice(0, 1500));
@@ -411,17 +418,23 @@ async function main() {
     }
   } catch (err) {
     console.error("Error during check:", err);
-    await page
-      .screenshot({ path: `screenshot-failure-${Date.now()}.png`, fullPage: true })
-      .catch(() => {});
+    await snap("ERROR page").catch(() => {});
     await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
       slots_found: [],
       slot_count: 0,
       error: String(err),
     });
+    if (process.env.SEND_SCREENSHOTS === "true") {
+      await sendScreenshotEmail(screenshots, true).catch(() => {});
+    }
     throw err;
   } finally {
+    if (process.env.SEND_SCREENSHOTS === "true" && screenshots.length > 0) {
+      await sendScreenshotEmail(screenshots, false).catch((e) =>
+        console.warn("Screenshot summary email failed:", e.message)
+      );
+    }
     await browser.close();
   }
 }
@@ -614,28 +627,37 @@ function parseSlotDate(slotLabel: string): Date | null {
   return null;
 }
 
-async function sendScreenshotEmail(screenshotPath: string, currentUrl: string) {
-  const imgBuffer = fs.readFileSync(screenshotPath);
-  const base64 = imgBuffer.toString("base64");
+async function sendScreenshotEmail(
+  shots: { label: string; path: string }[],
+  isError: boolean
+) {
   const now = new Date().toUTCString();
+  const attachments = shots
+    .filter((s) => fs.existsSync(s.path))
+    .map((s) => ({
+      filename: `${s.label}.png`,
+      content: fs.readFileSync(s.path).toString("base64"),
+    }));
+
+  const rows = shots
+    .map((s, i) => `<tr><td style="padding:4px 8px;color:#888">${i + 1}</td><td style="padding:4px 8px">${s.label}</td></tr>`)
+    .join("");
+
   await resend.emails.send({
     from: "MCA Monitor <onboarding@resend.dev>",
     to: NOTIFY_EMAIL,
-    subject: `MCA Monitor — login check ${now}`,
+    subject: `MCA Monitor — ${isError ? "❌ run failed" : "✅ run complete"} · ${now}`,
     html: `
-      <h2>MCA Portal Login Screenshot</h2>
-      <p>Taken at: <strong>${now}</strong></p>
-      <p>URL after login: <code>${currentUrl}</code></p>
-      <p>See attachment for the full-page screenshot.</p>
+      <h2>MCA Monitor — ${isError ? "Run Failed" : "Run Complete"}</h2>
+      <p>${attachments.length} screenshot(s) attached, one per stage:</p>
+      <table style="border-collapse:collapse;font-family:monospace;font-size:13px">
+        ${rows}
+      </table>
+      <p style="color:#666;font-size:12px;margin-top:16px">Each attachment is named after its stage.</p>
     `,
-    attachments: [
-      {
-        filename: "dashboard.png",
-        content: base64,
-      },
-    ],
+    attachments,
   });
-  console.log("Screenshot email sent to", NOTIFY_EMAIL);
+  console.log(`Screenshot summary email sent (${attachments.length} attachments)`);
 }
 
 async function sendNotification(slots: string[]) {
