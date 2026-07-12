@@ -372,11 +372,77 @@ async function main() {
     }
     await snap("6 Earliest available week");
 
-    const bodyAfterClick = await page.locator("body").innerText().catch(() => "");
-    console.log("Page after earliest click (first 1500 chars):\n", bodyAfterClick.slice(0, 1500));
+    // Scan ALL weeks from earliest up to TARGET_DATE
+    // Each "Next week" click + wait ≈ 8s; ~17 weeks max to Nov 3 ≈ ~2.5 min total
+    const allSlots: string[] = [];
+    const allWeeks: WeekResult[] = [];
+    const targetDateMs = new Date(TARGET_DATE).getTime();
+    const nextWeekSelectors = [
+      'button:has-text("Next week")',
+      'a:has-text("Next week")',
+      'button:has-text("Next")',
+      'a:has-text("Next")',
+    ];
 
-    const { slots, weeks } = await extractSlotsFromPage(page, TARGET_DATE, bodyAfterClick);
-    console.log(`Found ${slots.length} available slot(s):`, slots);
+    let weekNum = 0;
+    let keepScanning = true;
+
+    while (keepScanning) {
+      weekNum++;
+      const body = await page.locator("body").innerText().catch(() => "");
+      console.log(`Week ${weekNum} — page (first 800 chars):\n`, body.slice(0, 800));
+
+      const { slots: weekSlots, weeks: weekData } = await extractSlotsFromPage(page, TARGET_DATE, body);
+      // Tag with correct week number
+      const taggedWeeks = weekData.map((w) => ({ ...w, weekNum }));
+      allSlots.push(...weekSlots);
+      allWeeks.push(...taggedWeeks);
+      console.log(`Week ${weekNum}: ${weekSlots.length} slot(s) found — ${taggedWeeks[0]?.dateRange ?? "unknown range"}`);
+
+      // Stop if the latest date in this week is already past TARGET_DATE
+      const weekDates = taggedWeeks.flatMap((w) =>
+        w.slots.concat(w.dateRange ? [w.dateRange] : [])
+      );
+      const latestInWeek = taggedWeeks[0]?.dateRange ?? "";
+      // Parse the end date from the range "X Month Y – A Month B"
+      const rangeEnd = latestInWeek.split("–").pop()?.trim() ?? "";
+      const rangeEndDate = parseSlotDate(rangeEnd);
+      if (rangeEndDate && rangeEndDate.getTime() >= targetDateMs) {
+        console.log("Reached week that covers TARGET_DATE — stopping scan");
+        keepScanning = false;
+        break;
+      }
+
+      // Try to click "Next week"
+      let clicked = false;
+      for (const sel of nextWeekSelectors) {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+          console.log(`Clicking next week via: ${sel}`);
+          await btn.click();
+          await page.waitForTimeout(4000); // portal is slow — fixed wait, no networkidle
+          clicked = true;
+          break;
+        }
+      }
+      if (!clicked) {
+        console.log("No 'Next week' button found — end of available weeks");
+        keepScanning = false;
+      }
+
+      // Safety cap: never scan more than 25 weeks
+      if (weekNum >= 25) {
+        console.log("Safety cap reached (25 weeks) — stopping");
+        keepScanning = false;
+      }
+    }
+
+    if (weekNum > 1) await snap("6z Final week scanned");
+    console.log(`Scanned ${weekNum} week(s) total. All slots found:`, allSlots);
+
+    const slots = [...new Set(allSlots)];
+    const weeks = allWeeks;
+    console.log(`Deduplicated: ${slots.length} unique slot(s)`);
 
     const { error: insertErr } = await supabase.from("checks").insert({
       checked_at: new Date().toISOString(),
