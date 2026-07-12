@@ -376,7 +376,8 @@ async function main() {
     // Each "Next week" click + wait ≈ 8s; ~17 weeks max to Nov 3 ≈ ~2.5 min total
     const allSlots: string[] = [];
     const allWeeks: WeekResult[] = [];
-    const targetDateMs = new Date(TARGET_DATE).getTime();
+    // Use the booking date read from the page (more reliable than TARGET_DATE secret)
+    const targetDateMs = targetMs;
     const nextWeekSelectors = [
       'button:has-text("Next week")',
       'a:has-text("Next week")',
